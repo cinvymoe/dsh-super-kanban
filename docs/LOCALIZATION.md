@@ -51,9 +51,18 @@ node --test 'tests/**/*.test.mjs'
 
 Checks cover catalog completeness, placeholder parity, Chinese fallback,
 unsupported languages, literal interpolation, native language changes, date
-locale, English browser output and preservation of raw evidence. Existing
+locale, English browser output and preservation of raw evidence. A language
+change refreshes board data and scan messages for the current process.
+Saved scan results retain their original text on restart. Existing
 Chinese UI contracts are still exercised explicitly. Scan finalization uses a
 structural completion marker rather than parsing a translated message prefix.
+
+## Plugin introduction
+
+DSH loads the installed plugin title, summary and detail path from
+`locale/en.json` and `locale/zh.json`. Both detail pages ship in `docs/plugin/`.
+The market index generator reuses the titles and summaries from the same locale
+files. npm and installation previews use the short bilingual manifest description.
 
 ## Existing cards
 

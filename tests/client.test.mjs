@@ -1113,3 +1113,34 @@ test("English follows native locale and static label tables update after a langu
   active = "ru";
   assert.equal(plugin.STATUS_META.done.label, "Done");
 });
+
+test("changing locale refreshes projected board data and discards the preceding response", async () => {
+  let active = "zh";
+  const requests = [];
+  const locale = { getSnapshot: () => ({ active }) };
+  const changes = [];
+  const { plugin } = loadClient({ locale }, {
+    inspect: true,
+    onState: (value) => changes.push(value),
+    fetch: (_url, { headers }) => new Promise((resolve) => {
+      requests.push({ language: headers["x-super-kanban-locale"], resolve });
+    }),
+  });
+  const result = (title) => ({
+    ok: true, json: async () => ({ ok: true, tasks: [{ id: "same", updatedAt: "same", title }] }),
+  });
+  const board = plugin.useBoardData();
+  const chinese = board.reload(true);
+  requests[0].resolve(result("旧任务"));
+  await chinese;
+
+  const stale = board.reload(true);
+  active = "en";
+  const english = board.reload(true);
+  assert.deepEqual(requests.map(({ language }) => language), ["zh", "zh", "en"]);
+  requests[2].resolve(result("Existing task"));
+  assert.equal((await english).tasks[0].title, "Existing task");
+  requests[1].resolve(result("旧任务"));
+  assert.equal(await stale, null);
+  assert.deepEqual(changes.filter((item) => item?.tasks).map((item) => item.tasks[0].title), ["旧任务", "Existing task"]);
+});

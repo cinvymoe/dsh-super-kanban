@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-11-17
+
+- 插件管理页和市场介绍跟随 DSH 切换中英文，npm 简介同时提供两种语言。
+- 切换语言后立即刷新看板数据和本轮扫描提示，避免旧请求覆盖新语言的内容。
+- Plugin introductions follow the DSH language, with a bilingual npm summary.
+- Switching languages refreshes board data and current scan messages and discards stale responses.
+
 ## [0.10.3] - 2026-11-17
 
 ### 改进
@@ -504,7 +511,8 @@ workspace into a maintainable task board.
   v0.5.0 model requests go through the DSH native model service — see the
   current SECURITY.md.)*
 
-[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...HEAD
+[0.10.4]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.0...v0.10.1

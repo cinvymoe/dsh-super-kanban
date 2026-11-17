@@ -1081,15 +1081,18 @@ window.__ModuleLoader__.load({
   };
 };
     let localeService = null;
-    const activeLanguage = () => localeService?.getSnapshot?.().active || (typeof document !== 'undefined' ? document.documentElement?.lang : '') || 'en';
+    const activeLanguage = () => localeService?.getSnapshot?.()?.active || (typeof document !== 'undefined' ? document.documentElement?.lang : '') || 'en';
     const t = createTranslator(EN_MESSAGES, activeLanguage);
     const displayLocale = () => /^zh(?:-|$)/i.test(activeLanguage()) ? 'zh-CN' : 'en';
-    function LocaleBoundary({ render }) {
-      React.useSyncExternalStore(
+    function useActiveLanguage() {
+      return React.useSyncExternalStore(
         (notify) => localeService?.subscribe?.(notify) || (() => {}),
-        () => localeService?.getSnapshot?.().active || 'en',
+        activeLanguage,
         () => 'en',
       );
+    }
+    function LocaleBoundary({ render }) {
+      useActiveLanguage();
       return render();
     }
     /* i18n:generated:end */
@@ -3498,8 +3501,9 @@ button.sk-task-row-main{cursor:pointer}
     }
 
     function requestBoardState() {
-      if (sharedStateRequest?.generation !== stateGeneration) {
-        const entry = { generation: stateGeneration };
+      const language = activeLanguage();
+      if (sharedStateRequest?.generation !== stateGeneration || sharedStateRequest.language !== language) {
+        const entry = { generation: stateGeneration, language };
         entry.promise = apiRequest("/state").finally(() => {
           if (sharedStateRequest === entry) sharedStateRequest = null;
         });
@@ -3531,8 +3535,6 @@ button.sk-task-row-main{cursor:pointer}
           eventTimer = setTimeout(() => { eventTimer = null; refresh(); }, 180);
         };
         const eventsUrl = new URL(`${API}/events`, document.baseURI);
-        const eventsLanguage = activeLanguage();
-        if (eventsLanguage) eventsUrl.searchParams.set("locale", eventsLanguage);
         const stream = typeof EventSource === "function" ? new EventSource(eventsUrl) : null;
         stream?.addEventListener("changed", invalidateBoardState);
         stream?.addEventListener("scan", notify);
@@ -3560,6 +3562,7 @@ button.sk-task-row-main{cursor:pointer}
     }
 
     function useBoardData() {
+      const language = useActiveLanguage();
       const [data, setData] = React.useState(null);
       const [error, setError] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
@@ -3578,11 +3581,13 @@ button.sk-task-row-main{cursor:pointer}
         const entry = requestBoardState();
         if (inflight.current?.entry === entry) return inflight.current.task;
         if (!silent) setLoading(true);
-        const isCurrent = () => mounted.current && inflight.current?.entry === entry && entry.generation === stateGeneration;
+        const isCurrent = () => mounted.current && inflight.current?.entry === entry &&
+          entry.generation === stateGeneration && entry.language === activeLanguage();
         const task = entry.promise
           .then((payload) => {
             if (!isCurrent()) return null;
-            const next = stateSignature(payload);
+            // Localized projections can change without a task revision.
+            const next = entry.language + ":" + stateSignature(payload);
             if (next !== signature.current) {
               signature.current = next;
               setData(payload);
@@ -3605,8 +3610,8 @@ button.sk-task-row-main{cursor:pointer}
       }, []);
 
       React.useEffect(() => {
-        load(false);
-      }, [load]);
+        load(true);
+      }, [load, language]);
 
       const scanning = data?.scan?.state === "running";
       React.useEffect(() => subscribeBoardRefresh(load), [load]);
@@ -7788,7 +7793,7 @@ button.sk-task-row-main{cursor:pointer}
       // Host 的 scan.message 已是完整结论（含 AI 调用 / 跳过 / 合并等信息），客户端不再拼接。
       const scanOutcomeText =
         scan.state === "done" ? String(scan.message || t("扫描完成：{0}/{1} 个会话", [scan.processed || 0, scan.total || 0])) : "";
-      const scanErrorText = scan.state === "error" ? String(scan.error || scan.message || t("未知错误")) : "";
+      const scanErrorText = scan.state === "error" ? String(scan.message || scan.error || t("未知错误")) : "";
       const scanTitleText =
         scan.state === "done" && Number(scan.aiCalls) > 0 && !/tokens/.test(scanOutcomeText)
           ? `${scanOutcomeText} · ${fmtTokens(scan.tokens)} tokens`

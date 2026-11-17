@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -63,6 +64,21 @@ test("package.json declares the DSH host and client halves", () => {
     "@deepseek-ai/dsh-client-ui-sidebar",
     "@deepseek-ai/dsh-client-ui-workspace",
   ]);
+});
+
+test("DSH can resolve the packaged locale metadata and read both detail documents", () => {
+  const require = createRequire(import.meta.url);
+  assert.ok(pkg.files.includes("locale/"));
+  assert.ok(pkg.files.includes("docs/plugin/"));
+  for (const [language, writtenLanguage] of [["en", /\p{Script=Latin}/u], ["zh", /\p{Script=Han}/u]]) {
+    const file = require.resolve(`${pkg.name}/locale/${language}.json`);
+    const { meta } = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.ok(meta.title.includes("Super Kanban"));
+    assert.match(meta.description, writtenLanguage);
+    assert.ok(pkg.description.includes(meta.description));
+    assert.match(meta.detail, new RegExp(`^docs/plugin/${language}\\.md$`));
+    assert.match(fs.readFileSync(path.join(ROOT, meta.detail), "utf8"), writtenLanguage);
+  }
 });
 
 test("package.json engines are valid SemVer ranges", () => {

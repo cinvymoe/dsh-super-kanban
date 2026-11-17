@@ -17,7 +17,7 @@ test("English catalog is complete, readable and preserves every interpolation", 
   }
   for (const file of ["client.js", ...fs.readdirSync(new URL("../server/", import.meta.url)).filter((n) => n.endsWith(".mjs")).map((n) => `server/${n}`)]) {
     const text = fs.readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-    for (const match of text.matchAll(/\bt\(("(?:[^"\\]|\\.)*")/g)) {
+    for (const match of text.matchAll(/\b(?:t|translate)\(("(?:[^"\\]|\\.)*")/g)) {
       assert.ok(Object.hasOwn(messages, JSON.parse(match[1])), `${file}: ${match[1]}`);
     }
   }

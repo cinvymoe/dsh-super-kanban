@@ -22,9 +22,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { MARKET_INDEX_PATH, deriveIndexUrl, normalizeRepositoryUrl, validateMarketIndex } from "./validate.mjs";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const PLUGIN_TITLE = { en: "Super Kanban", zh: "Super Kanban 任务看板" };
-export const PLUGIN_DESCRIPTION_ZH =
-  "面向 DeepSeek Harness 的 AI 项目看板。自动把会话整理成任务，集中处理审批、阻塞和验收，支持跨工作区项目与日程。全局、右侧、悬浮三种形态随手切换，快聊可写提示词、解释、总结和翻译。";
 export const INDEX_TITLE = { en: "TopMindSpace DSH plugins", zh: "TopMindSpace DSH 插件索引" };
 export const INDEX_DESCRIPTION = {
   en: "Installable plugins for DeepSeek Harness maintained by TopMindSpace.",
@@ -41,6 +38,15 @@ function readJson(file) {
 /** Read the repository package.json. */
 export function readPackage(root = ROOT) {
   return readJson(path.join(root, "package.json"));
+}
+
+function readPluginText(root) {
+  const { meta: en } = readJson(path.join(root, "locale", "en.json"));
+  const { meta: zh } = readJson(path.join(root, "locale", "zh.json"));
+  return {
+    title: { en: en.title, zh: zh.title },
+    description: { en: en.description, zh: zh.description },
+  };
 }
 
 /** Resolve the git commit that the git-source version should pin. */
@@ -92,6 +98,7 @@ function previousVersions(previous, name) {
  *   previous timestamp is reused for an unchanged version/source, otherwise the
  *   current time is used.
  * @param {object|null} [options.previous] previously generated index (versions are preserved).
+ * @param {string} [options.root] repository containing the package's locale files.
  * @param {string} [options.repositoryUrl] canonical repository URL.
  * @returns {object} format-1 market index
  */
@@ -101,6 +108,7 @@ export function buildMarketIndex({
   commit = null,
   publishTimestamp = null,
   previous = null,
+  root = ROOT,
   repositoryUrl = normalizeRepositoryUrl(pkg),
 }) {
   if (!pkg || typeof pkg !== "object") throw new Error("buildMarketIndex requires a package.json object");
@@ -140,8 +148,7 @@ export function buildMarketIndex({
 
   const plugin = {
     name: pkg.name,
-    title: PLUGIN_TITLE,
-    description: { en: pkg.description, zh: PLUGIN_DESCRIPTION_ZH },
+    ...readPluginText(root),
     icon: "./icon.svg",
     ...(typeof pkg.author === "string" ? { author: pkg.author } : {}),
     ...(typeof pkg.homepage === "string" ? { homepage: pkg.homepage } : {}),
@@ -264,6 +271,7 @@ function main() {
   try {
     index = buildMarketIndex({
       pkg,
+      root,
       source: options.source,
       commit,
       publishTimestamp: resolveTimestamp(options),

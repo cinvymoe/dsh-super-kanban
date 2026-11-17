@@ -105,7 +105,7 @@ async function call(service, { method = "GET", route = "/state", headers = {}, s
     req.emit("end");
   }
   await pending;
-  return { status: res.status, json: JSON.parse(res.body) };
+  return { status: res.status, json: route === "/events" && res.status === 200 ? null : JSON.parse(res.body) };
 }
 
 async function waitForScan(service) {
@@ -132,10 +132,19 @@ test("server generation stays Chinese by default and follows the stored or reque
   t.after(() => initial.stop());
   const idle = await call(initial);
   assert.match(idle.json.scan.message, /等待首次扫描/);
+  const englishIdle = await call(initial, { headers: { "x-super-kanban-locale": "en" } });
+  assert.match(englishIdle.json.scan.message, /Waiting for first scan/);
+  const chineseIdle = await call(initial, { headers: { "x-super-kanban-locale": "zh" } });
+  assert.match(chineseIdle.json.scan.message, /等待首次扫描/);
   assert.equal((await call(initial, { method: "POST", route: "/command", body: { op: "scan.start", payload: {} } })).status, 200);
   const chinese = await waitForScan(initial);
   assert.match(chinese.message, /扫描完成/);
   assert.doesNotMatch(chinese.message, /Scan finished/);
+  const englishView = await call(initial, { headers: { "x-super-kanban-locale": "en" } });
+  assert.match(englishView.json.scan.message, /Scan finished/);
+  const staleStream = await call(initial, { route: "/events", search: "?locale=zh" });
+  assert.equal(staleStream.status, 200);
+  assert.match((await call(initial)).json.scan.message, /Scan finished/);
 
   fs.rmSync(path.join(home, "storages", "super-kanban"), { recursive: true, force: true });
   fs.mkdirSync(path.join(home, "profiles", "desktop"), { recursive: true });

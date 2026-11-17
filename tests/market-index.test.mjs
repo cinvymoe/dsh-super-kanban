@@ -33,8 +33,11 @@ test("buildMarketIndex produces a valid git-source format-1 index", () => {
   assert.equal(plugin.name, "dsh-super-kanban");
   assert.equal(plugin.title.en, "Super Kanban");
   assert.equal(plugin.title.zh, "Super Kanban 任务看板");
-  assert.equal(plugin.description.en, pkg.description);
-  assert.ok(plugin.description.zh.length > 20);
+  for (const language of ["en", "zh"]) {
+    const { meta } = JSON.parse(fs.readFileSync(path.join(ROOT, "locale", `${language}.json`), "utf8"));
+    assert.equal(plugin.title[language], meta.title);
+    assert.equal(plugin.description[language], meta.description);
+  }
   assert.equal(plugin.icon, "https://topmindspace.github.io/dsh-super-kanban/icon.svg");
   assert.equal(plugin.metadata.category, "productivity");
   assert.deepEqual(plugin.metadata.labels, ["kanban", "ai"]);

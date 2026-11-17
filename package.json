@@ -1,20 +1,23 @@
 {
   "name": "dsh-super-kanban",
-  "version": "0.10.3",
-  "description": "AI project board for DeepSeek Harness: turns sessions into tasks, with live status, acceptance review, full/side/floating views and quick chat.",
+  "version": "0.10.4",
+  "description": "DSH AI 任务看板：从会话提取任务，跟踪进度和验收。 / AI task board for DSH: turn sessions into tasks, track progress, and review deliverables.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
     ".": "./index.mjs",
     "./client": "./client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.mjs",
     "client.js",
     "cordis.patch.yml",
     "server/",
+    "locale/",
     "locales/",
+    "docs/plugin/",
     "icon.svg",
     "CHANGELOG.md"
   ],

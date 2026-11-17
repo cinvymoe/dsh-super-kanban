@@ -1,6 +1,12 @@
-import { t, runWithLanguage } from "./i18n.mjs";
+import messages from "../locales/en.mjs";
+import { createTranslator, currentLanguage, t, runWithLanguage } from "./i18n.mjs";
 import { localeFromRequest, localeFromSnapshot, profileNameFromContext, readStoredLocale } from "./locale.mjs";
 import { createTextProjection } from "./text-projection.mjs";
+
+const scanTranslators = {
+  zh: createTranslator(messages, "zh"),
+  en: createTranslator(messages, "en"),
+};
 /**
  * Super Kanban — host service.
  *
@@ -142,6 +148,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
   let parentToChildren = new Map();
 
   let scanPromise = null;
+  let scanMessages = null;
   let scanHasConclusion = false;
   let scanCancel = false;
   let scanAbort = null;
@@ -273,18 +280,18 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
   }
 
   /** Explain why the selected route cannot be used. */
-  function aiRouteFailureMessage(selection) {
+  function aiRouteFailureMessage(selection, translate = t) {
     switch (selection.reason) {
       case "llm-unavailable":
-        return t("当前 DSH 未提供 AI 模型服务，请检查 DSH 版本和模型配置");
+        return translate("当前 DSH 未提供 AI 模型服务，请检查 DSH 版本和模型配置");
       case "provider-unavailable":
         return selection.source === "default"
-          ? t("DSH 默认模型提供方 {0} 不可用，请在 DSH 设置 → 模型 中配置", [selection.provider])
-          : t("所选模型提供方 {0} 已不可用，请在看板中重新选择模型", [selection.provider]);
+          ? translate("DSH 默认模型提供方 {0} 不可用，请在 DSH 设置 → 模型 中配置", [selection.provider])
+          : translate("所选模型提供方 {0} 已不可用，请在看板中重新选择模型", [selection.provider]);
       case "no-default-model":
-        return t("DSH 尚未设置默认模型，请在看板中选择模型，或在 DSH 设置 → 模型中配置默认模型");
+        return translate("DSH 尚未设置默认模型，请在看板中选择模型，或在 DSH 设置 → 模型中配置默认模型");
       default:
-        return t("AI 模型不可用");
+        return translate("AI 模型不可用");
     }
   }
 
@@ -369,10 +376,17 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     explicitAiAbort = null;
   }
 
+  /** Keep the display text available to both languages without relabeling the scan's generated data. */
+  function setScanMessage(render) {
+    const localized = { zh: render(scanTranslators.zh), en: render(scanTranslators.en) };
+    state.scan.message = localized[currentLanguage()];
+    scanMessages = { startedAt: state.scan.startedAt, original: state.scan.message, localized };
+  }
+
   /** Compose the human-readable scan conclusion (the host owns scan.message). */
-  function buildScanMessage({
+  function buildScanMessage(t, {
     lowValueSkipped = 0,
-    aiRouteMessage = null,
+    unavailableRoute = null,
     aiDeferredReason = null,
     aiBudget = 0,
     aiPending = 0,
@@ -385,7 +399,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     if (state.scan.aiCalls > 0) parts.push(t("AI {0} 次/{1} tokens", [state.scan.aiCalls, state.scan.tokens]));
     else if (state.settings.aiEnabled && !state.scan.aiBudgetUsed) parts.push(t("本次无 AI 调用"));
     if (lowValueSkipped > 0) parts.push(t("低价值跳过 {0}", [lowValueSkipped]));
-    if (aiRouteMessage) parts.push(aiRouteMessage);
+    if (unavailableRoute) parts.push(aiRouteFailureMessage(unavailableRoute, t));
     if (aiDeferredReason === "daily") {
       parts.push(t("今日 AI 预算已用完（{0}/{1}）", [usedAfter, dailyLimit]));
       if (pending > 0) parts.push(t("剩余 {0} 个会话明日继续（本次其余仅规则）", [pending]));
@@ -399,7 +413,8 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       parts.push(t("剩余 {0} 个会话下次扫描继续", [pending]));
     }
     if (aiFailureCount > 0) parts.push(t("{0} 个会话研判失败{1}", [aiFailureCount, aiDeferredReason === "daily" ? "" : t("，5 分钟后重试")]));
-    return parts.join(" · ");
+    const summary = parts.join(" · ");
+    return state.scan.historicalSkipped ? summary + t(" · 跳过 {0} 个历史会话", [state.scan.historicalSkipped]) : summary;
   }
 
   /* ------------------------- AI model catalog ----------------------- */
@@ -768,6 +783,8 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
   }
 
   function buildStatePayload() {
+    const scan = state.scan;
+    const hasCurrentScanText = scanMessages && scanMessages.startedAt === scan.startedAt && scanMessages.original === scan.message;
     return {
       ok: true,
       generatedAt: new Date().toISOString(),
@@ -783,7 +800,11 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       stats: computeStats(),
       activity: state.activity,
       workspaces: boardWorkspaces(),
-      scan: { ...state.scan, message: textProjection.text(state.scan.message) },
+      scan: {
+        ...scan,
+        message: scan.state === "idle" ? t("等待首次扫描")
+          : hasCurrentScanText ? scanMessages.localized[currentLanguage()] : textProjection.text(scan.message),
+      },
       settings: state.settings,
       aiRoute: resolveAiRoute(),
       usage: state.usage,
@@ -1602,8 +1623,8 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       ...emptyScanState(),
       state: "running",
       startedAt: startedAt.toISOString(),
-      message: t("正在发现会话…"),
     };
+    setScanMessage((t) => t("正在发现会话…"));
     scanDigestBytes = [];
     broadcastScan(true);
     scanPromise = (async () => {
@@ -1637,10 +1658,10 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     state.scan.state = failure ? "error" : "done";
     state.scan.finishedAt = finishedAt.toISOString();
     state.scan.error = failure ? String(failure?.message || failure) : null;
-    if (failure) state.scan.message = t("扫描失败：{0}", [state.scan.error]);
-    else if (scanCancel) state.scan.message = t("扫描已取消（已完成部分保留）");
+    if (failure) setScanMessage((t) => t("扫描失败：{0}", [state.scan.error]));
+    else if (scanCancel) setScanMessage((t) => t("扫描已取消（已完成部分保留）"));
     else if (!scanHasConclusion) {
-      state.scan.message = t("扫描完成：{0}/{1} 个会话", [state.scan.processed, state.scan.total]);
+      setScanMessage((t) => t("扫描完成：{0}/{1} 个会话", [state.scan.processed, state.scan.total]));
     }
     state.settings.lastScanAt = finishedAt.toISOString();
     state.activity = computeActivity();
@@ -1659,7 +1680,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     if (!persistState()) {
       state.scan.state = "error";
       state.scan.error = t("无法保存扫描结果");
-      state.scan.message = t("扫描结果尚未保存，请检查存储后重试");
+      setScanMessage((t) => t("扫描结果尚未保存，请检查存储后重试"));
     } else {
       persistCache();
     }
@@ -1679,7 +1700,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     }
     const discoverySessions = discovery.sessions;
     state.scan.total = discoverySessions.length;
-    state.scan.message = t("发现 {0} 个会话，开始分析…", [discoverySessions.length]);
+    setScanMessage((t) => t("发现 {0} 个会话，开始分析…", [discoverySessions.length]));
     broadcastScan(true);
 
     const cutoff = mode === "full" ? 0 : activeCutoff();
@@ -1804,7 +1825,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
           });
         }
         if (state.scan.processed % 4 === 0) {
-          state.scan.message = t("分析 {0}/{1} 个会话…", [state.scan.processed, state.scan.total]);
+          setScanMessage((t) => t("分析 {0}/{1} 个会话…", [state.scan.processed, state.scan.total]));
           broadcastScan();
         }
       } catch (error) {
@@ -1818,7 +1839,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     // The model route is resolved once per scan; an unavailable route degrades
     // the whole AI phase to rules-only instead of failing the scan.
     let aiDeferredReason = null;
-    let aiRouteMessage = null;
+    let unavailableRoute = null;
     let aiFailureCount = 0;
     const aiJobs = analysisJobs.filter((job) => job.needsAi && isEligibleForAutoTask(job.meta, cutoff)).sort(compareAiJobs);
     state.scan.aiDue = aiJobs.length;
@@ -1828,9 +1849,9 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         state.scan.aiBudget = 0;
         state.scan.aiPending = aiJobs.length;
       } else {
-        const route = resolveAiRoute();
+        const route = aiSelection(llmService());
         if (!route.ok) {
-          aiRouteMessage = route.message;
+          unavailableRoute = route;
           state.scan.aiBudget = 0;
           state.scan.aiPending = aiJobs.length;
           logWarn(`[super-kanban] AI route unavailable (${route.reason}); rules only this scan`);
@@ -1848,10 +1869,10 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
             aiBudgetExhausted = true;
             state.scan.aiPending = aiJobs.length;
             for (const job of aiJobs) job.llmBudgetExceeded = true;
-            state.scan.message = t("今日 AI 预算已用完（{0}/{1}），本次仅规则分析", [state.usage.budgetUsed, state.settings.dailyAiCallLimit]);
+            setScanMessage((t) => t("今日 AI 预算已用完（{0}/{1}），本次仅规则分析", [state.usage.budgetUsed, state.settings.dailyAiCallLimit]));
             logWarn("[super-kanban] daily AI budget exhausted; rules only this scan");
           } else {
-            state.scan.message = t("AI 研判 {0} 个会话（预算 {1}）…", [aiJobs.length, scanBudget]);
+            setScanMessage((t) => t("AI 研判 {0} 个会话（预算 {1}）…", [aiJobs.length, scanBudget]));
             broadcastScan(true);
             // Wall-clock guard for the whole AI stage: a slow/retrying provider
             // must never keep the scan mutex for hours.
@@ -1905,7 +1926,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
                 }),
               );
               state.scan.aiBudgetUsed = readAnalyzerBudget().calls;
-              state.scan.message = t("AI 研判 {0}/{1} 个会话（今日 {2}/{3}）…", [state.scan.aiBudgetUsed, aiJobs.length, state.usage.budgetUsed, state.settings.dailyAiCallLimit]);
+              setScanMessage((t) => t("AI 研判 {0}/{1} 个会话（今日 {2}/{3}）…", [state.scan.aiBudgetUsed, aiJobs.length, state.usage.budgetUsed, state.settings.dailyAiCallLimit]));
               broadcastScan();
               if (phaseTimeout.aborted) {
                 aiDeferredReason = "time";
@@ -2022,17 +2043,16 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     state.workspaces = computeWorkspaces(discovery.workspaces, [...sessionsById.values()]);
     state.activity = computeActivity();
     if (scanCancel) {
-      state.scan.message = t("扫描已取消");
+      setScanMessage((t) => t("扫描已取消"));
     } else {
-      state.scan.message = buildScanMessage({
+      setScanMessage((t) => buildScanMessage(t, {
         lowValueSkipped,
-        aiRouteMessage,
+        unavailableRoute,
         aiDeferredReason,
         aiBudget: state.scan.aiBudget,
         aiPending: state.scan.aiPending,
         aiFailureCount,
-      });
-      if (state.scan.historicalSkipped) state.scan.message += t(" · 跳过 {0} 个历史会话", [state.scan.historicalSkipped]);
+      }));
       scanHasConclusion = true;
     }
     broadcastScan(true);
@@ -3425,7 +3445,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       } catch {
         /* ignore */
       }
-      state.scan.message = t("正在取消扫描…");
+      setScanMessage((t) => t("正在取消扫描…"));
       broadcastScan(true);
       return { cancelling: true };
     },
@@ -3577,8 +3597,9 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
 
   async function handle(req, res, options = {}) {
     const reported = localeFromRequest(req, options.url);
-    if (reported) reportedLanguage = reported;
-    return runWithLanguage(resolveBoardLanguage(), () => handleLocalized(req, res, options));
+    // EventSource reconnects with its original URL, including any locale from an older client.
+    if (reported && options.route !== "/events") reportedLanguage = reported;
+    return runWithLanguage(reported || resolveBoardLanguage(), () => handleLocalized(req, res, options));
   }
 
   async function handleLocalized(req, res, { route = "/", url, method = "GET" } = {}) {
