@@ -28,7 +28,7 @@ and the pull-request flow.
 | `cordis.patch.yml` | Cordis bundle patch that inserts the plugin into a DSH profile. |
 | `server/` | Host implementation: session scanning, rules/LLM analysis, store, HTTP service. |
 | `package.json` | npm package metadata, DSH plugin manifest (`dsh` field) and scripts. |
-| `icon.svg` | Plugin icon (128×128). |
+| `icon.svg` | DSH plugin icon (36×36 SVG, transparent canvas). |
 | `docs/` | Public docs, screenshots, the GitHub Pages landing page (`index.html`) and the plugin-market index (`index.json`). |
 | `scripts/` | Zero-dependency validators, docs/version checkers, market-index generator and release helper. |
 | `tests/` | `node --test` suites; no third-party runner. |
