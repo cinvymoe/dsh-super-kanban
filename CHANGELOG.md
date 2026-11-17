@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-11-17
+
 - 看板显示分阶段扫描进度，首次或全量扫描后可直接进入列表整理。
-- 列表支持批量改状态和筛选已有闲聊卡片，纯寒暄会话会跳过自动建卡。
-- 任务抽屉支持搜索并选择跨会话合并来源，产出页支持按文件扩展名筛选。
+- 列表支持批量改状态、归档、恢复和筛选已有闲聊卡片。纯寒暄会话跳过自动建卡，有实质回复、图片或工作记录的会话仍会处理。
+- 任务详情可按任务、会话和工作区搜索合并来源。其他来源会话的证据和产出随任务归集，后续扫描继续更新同一张卡。
+- 产出页支持按文件扩展名筛选，也可查看无扩展名的文件。
+- See scan progress, organize tasks in bulk, merge related sessions into one task, and filter artifacts by file extension. Automatic task creation skips small talk and keeps sessions with work signals.
 
 ## [0.10.4] - 2026-11-17
 
@@ -515,7 +519,8 @@ workspace into a maintainable task board.
   v0.5.0 model requests go through the DSH native model service — see the
   current SECURITY.md.)*
 
-[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...HEAD
+[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.1...v0.10.2

@@ -50,7 +50,7 @@ DSH 当前**没有内置的公共插件商店**。它的插件分发有四种官
 
 ### 方式 B：npm 包名
 
-DSH → 插件 → 添加插件 → 输入包名：`dsh-super-kanban`（安装 npm latest），或写**精确版本**（如 `dsh-super-kanban@0.10.4`，升级时推荐）→ 安装 → 启用 → 刷新。
+DSH → 插件 → 添加插件 → 输入包名：`dsh-super-kanban`（安装 npm latest），或写**精确版本**（如 `dsh-super-kanban@0.10.5`，升级时推荐）→ 安装 → 启用 → 刷新。
 
 ### 方式 C：Git 仓库
 
@@ -129,7 +129,7 @@ DSH → 插件 → 添加插件 → 输入包名：`dsh-super-kanban`（安装 n
 
 ## 5. 发布流程（维护者）
 
-维护者按仓库保护规则向 main 提交发布版本。普通改动通过 PR，并由 Node 22.19、Node 24 的 CI 和审批把关。
+维护者完成验证后可合入自己的 PR，并直接向 main 提交发布版本。外部贡献通过 PR，由 Node 22.19、Node 24 的 CI 和维护者审批后合入。
 
 1. 同步远端 main。默认只升补丁版本号，更新 package.json、CHANGELOG.md 和安装示例。支持版本线变化时更新 SECURITY.md。提交版本代码，保持工作区干净。
 2. 运行 npm run release。辅助脚本生成索引，指向已提交的版本代码，并执行仓库检查。
