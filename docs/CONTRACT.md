@@ -184,9 +184,15 @@ type Priority = "P0" | "P1" | "P2" | "P3";
   ],
   "scan": {
     "state": "idle|running|done|error",
+    "phase": "discover|read|ai|apply|null",
+    "mode": "incremental|full|null",
+    "first": false,                         // 首次扫描或其重试
+    "cancelled": false,                     // 结束时是否由用户取消
     "startedAt": "ISO|null", "finishedAt": "ISO|null",
     "processed": 10, "total": 10,
     "historicalSkipped": 0,                  // 增量扫描未读取的历史会话数
+    "conversationSkipped": 0,               // 未生成任务的纯闲聊会话数
+    "applyProcessed": 2, "applyTotal": 2,    // 看板写入阶段的处理进度
     "newTasks": 0, "updatedTasks": 2, "aiCalls": 3, "tokens": 5120,
     // v0.5 新增，全部可选 / additive；旧客户端可忽略
     "aiDue": 5,                              // 本轮需要 AI 研判的会话数
@@ -236,7 +242,9 @@ type Priority = "P0" | "P1" | "P2" | "P3";
 - 模型未配置或提供方不可用时，结论包含模型状态及配置入口。
 - `扫描失败：<错误信息>` / `扫描已取消（已完成部分保留）`；
 - 扫描过程中的瞬时提示（如 `AI 研判 N 个会话（预算 M）…`）也会写入 `scan.message`（SSE / 轮询可见），
-  运行中扫描按钮展示进度，结束后可查看最终结论。
+  看板根据 `phase` 显示发现会话、读取会话、AI 研判或更新看板的进度。维护视图展示最终结论。
+
+`updatedTasks` 统计本轮研判或会话刷新实际更新的任务数。同一任务由多个会话更新时只计一次。规则重扫结果未变化时保留任务版本。
 
 `scan.message` 的口径（Host 保证）：
 
@@ -424,6 +432,8 @@ Host 只构造用户文本和助手文本消息。
 
 `GET /state` 增加 `storage` 和 `maintenance`，分别提供写入健康状态、最近保存时间、会话读取失败数量、回收站与忽略清单。任务可携带 `attention`、`completionBasis`、`relations`、`resolvedIssues`、`pinned`。字段采用增量扩展，旧状态仍可读取。
 
+`GET /state` 为来源均被判定为纯闲聊且未人工编辑的自动任务附加 `casualConversation: true`。该标记来自当前会话缓存，列表可据此筛选。用户的消息和助手的回复都必须符合寒暄模式，图片、目标、工具活动和子代理等工作信号会保留会话。
+
 `review` 不是人工字段：`task.update` / `task.create` 不接受它，只有 Host 在观察到 `turn/end` 时写入，并在验收、手动改状态或忽略会话时清空（忽略与验收、改状态走同一套 `dismissReview`，会把该轮记入账本）。`state.json` 另含 Host 内部账本 `reviewSeen`（`sessionId → 已处理的 turn/end seq`，上限 500）和 `reviewDeferred`（`sessionId → 清除时刻的毫秒时间戳`，上限 500）：暂存「`seq` 为 0 时已被用户清除」的会话。结算扫描若观察到的轮次结束时间不晚于该时刻，只补记真实序号、不再钉卡；若在清除之后又结束了新轮次（即使发生在结算扫描之前），仍会钉一张新卡。若本次观察本就不会钉卡（例如日志还停在账本已记录的更早序号），则保留该标记，等真正对应的轮次落盘后再处理。二者均不进入 `/state` 响应和备份。
 
 `acceptanceCriteria` 是用户填写的多行验收条件，上限 600 字。`task.create` 接受该字段，`task.update` 在 `patch` 中接受，空字符串清空。自动研判保留此字段。有验收条件的未完成任务在会话提供完成依据时标为 `attention: "acceptance"`。`task.accept` 写入 `completionBasis: "user"`，并保留子任务的人工勾选状态。显式合并保留双方验收条件，超出上限时返回错误，合并撤销恢复各自条件。
@@ -436,8 +446,8 @@ Host 只构造用户文本和助手文本消息。
 - `task.linkSession` 接受 `{ id, sessionId, primary?, continuation?, remove? }`。续做会话被设为主会话，旧会话可继续补充产物与证据。
 - `task.relate` 接受 `{ id, taskId, type, remove? }`。类型为 `parent`、`depends_on`、`related`，父子与依赖关系分别检查循环。
 - `task.issue` 接受 `{ id, text, resolve? }`。手动记录的问题和已解决的同名问题在后台刷新后保留。
-- `task.batch` 接受 `{ ids, archived?, priority?, projectId? }`，单次最多 200 项。 `task.pin` 接受 `{ id, pinned }`。
-- `task.merge` 接受 `{ id, sourceId }`。删除和合并记录可用 `task.restore` 恢复。合并后的目标被再次编辑时，接口返回冲突以保护新修改。
+- `task.batch` 接受 `{ ids, status?, archived?, priority?, projectId? }`，单次最多 200 项。批量状态沿用 `task.update` 的状态变更语义并锁定状态。`task.pin` 接受 `{ id, pinned }`。
+- `task.merge` 接受 `{ id, sourceId, expectedUpdatedAt?, expectedSourceUpdatedAt? }`。主会话优先保留目标任务的主会话，合并后的会话按人工关联处理。删除和合并记录可用 `task.restore` 恢复。合并后目标版本发生变化时，撤销返回冲突以保护新修改。
 - `backup.preview` 接受 `{ backup }`，返回当前和待恢复的任务及项目数量、`expectedSavedAt` 与 `backupHash`。
 - `backup.restore` 接受 `{ backup, expectedSavedAt, backupHash }`。文件内容或看板版本变化时返回 409，恢复前先保留当前看板快照。恢复后的任务和项目使用新的版本；备份中仍匹配目标版本的合并记录可以继续撤销。浏览器支持最高 15 MiB 的备份文件，使用独立的 `POST /backup` 入口。
 - `storage.retry` 重试保存。用户写入失败返回 HTTP 503 / `storage-unavailable`，且内存回滚。
@@ -484,7 +494,7 @@ data: {"reason":"init"|"scan"|"task"|"settings","tasksChanged":2}
 - 设置弹窗的预算与用量：单次上限为单个下拉（`自动（推荐）/ 20 / 40 / 80 / 150`，当前值不在档位时补「固定 N 次」）；
   每日上限仍可调；用量行展示今日 `已用/上限/剩余`、tokens 与上次扫描，剩余不足或耗尽用琥珀文字说明
   （不加大进度条 / 彩色盒子）。
-- 页头扫描状态在运行中可追加 `· AI c/预算`（`scan.aiCalls` / `scan.aiBudget`，缺失时只显示次数）；
+- 扫描中，页头下方显示当前阶段与对应计数；AI 阶段显示已消耗预算单位和本轮预算（`scan.aiBudgetUsed` / `scan.aiBudget`）；
   完成/失败时仍原样展示 Host 的 `scan.message`，客户端不解析 message 数字、不自行拼「剩余」。
 - 后台更新时保留编辑草稿，合并互不重叠的字段。同一字段发生冲突时，由用户确认如何处理。
 - 打开会话 / 产物 / 终端后自动收起抽屉。
