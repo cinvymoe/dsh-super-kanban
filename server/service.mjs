@@ -186,6 +186,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
   let scanBroadcastTimer = null;
   let storageFailed = false;
   let scanDigestBytes = []; // digest byte sizes of the current scan (usage.lastScan.digestBytesAvg)
+  let scanRetiredMaintenanceCards = 0;
 
   /** Host loggers are external code: a broken logger must never break the board. */
   function logInfo(message) {
@@ -1188,6 +1189,153 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     return Boolean(task?.primarySessionId && task.primarySessionId !== sessionId);
   }
 
+  /**
+   * A plugin's own maintenance conversation (for example dsh-mnemon's idle
+   * review) runs as a normal top-level session once the plugin stops spawning
+   * it as a subagent, so `origin`/`delegationDepth` no longer identify it. It
+   * has no human requester and must never become a task card: the board would
+   * grow one card per maintenance pass, each looking like work the owner did.
+   */
+  function isMachineDelegatedSession(meta) {
+    return typeof meta?.delegatedTask === "string" && meta.delegatedTask !== "";
+  }
+
+  /**
+   * True only when the cache holds a clean, current parse (`delegatedRev === 1`,
+   * no `parseError`, matching signature when discovered) that classified the
+   * session as plugin maintenance work. Destructive repair never acts on stale
+   * or failed parses.
+   */
+  function isConfirmedMachineDelegatedSession(entry, currentSigKey = null) {
+    const meta = entry?.meta;
+    if (!meta || entry?.unparsed || meta.parseError || meta.delegatedRev !== 1) return false;
+    if (currentSigKey && entry.sigKey !== currentSigKey) return false;
+    return isMachineDelegatedSession(meta);
+  }
+
+  /**
+   * Resolve classification for a live `turn/end` session whose cache predates
+   * `delegatedRev`. Avoids pinning a maintenance session right after upgrade
+   * before the first scan has run.
+   */
+  function classifyLiveSessionMeta(sessionId, currentMeta) {
+    const meta = currentMeta?.file ? currentMeta : findSessionMeta(sessionId);
+    if (!meta?.file) return currentMeta || meta || null;
+    try {
+      const parsed = source.loadParsed(meta);
+      const entry = cacheEntryFor(parsed, meta);
+      cache.sessions[sessionId] = entry;
+      sessionsById.set(sessionId, entry.meta);
+      return entry.meta;
+    } catch (error) {
+      return { ...meta, parseError: String(error?.message || error) };
+    }
+  }
+
+  /**
+   * Remove cards whose only source sessions are machine-delegated maintenance
+   * runs. Earlier versions of this board could not tell those sessions from a
+   * human conversation, so every maintenance pass left a card behind — and its
+   * analyzer sometimes re-derived the owner's real tasks from the reviewed
+   * checkpoint, which is how duplicates appeared next to the genuine card.
+   *
+   * Such a card has no owner meaning: its source is a machine review, and the
+   * genuine task keeps its own human-sourced card. Two dispositions keep this
+   * lossless:
+   *   - untouched auto card → deleted (recorded in `state.recovery` within the
+   *     store's 50-entry retention window so `task.restore` brings it back, and
+   *     the session is suppressed so a later scan cannot rebuild it);
+   *   - owner-touched auto card (edited provenance, renamed, locked a field,
+   *     added a manual subtask, pinned it, accepted it, or referenced by
+   *     another task's relations) → archived instead, preserving all user edits
+   *     and keeping any pending merge undo valid;
+   *   - manually created cards (`origin === "manual"`) and cards the owner
+   *     explicitly restored or unarchived (`maintenanceRetained`) are never
+   *     retired.
+   * AI-written subtasks and AI-set fields never protect a card: the maintenance
+   * run wrote those itself.
+   *
+   * Also clears stale `task.review` notices owned by confirmed maintenance
+   * sessions even when a card stays active due to human supporting sessions.
+   *
+   * @returns {number} cards removed, archived, or review-cleared by this scan.
+   */
+  function retireMaintenanceCards(scanned, discoveredById = null) {
+    if (!scanned) return 0;
+    let changed = 0;
+    for (const task of [...state.tasks]) {
+      if (task.archived) continue;
+      if (task.review?.sessionId) {
+        const reviewId = task.review.sessionId;
+        const reviewSig = discoveredById?.get(reviewId)?.sigKey || null;
+        if (isConfirmedMachineDelegatedSession(cache.sessions[reviewId], reviewSig)) {
+          dismissReview(task);
+          touchRecoveredTask(task, state.recovery, 0);
+          changed += 1;
+        }
+      }
+      if (task.origin === "manual" || task.maintenanceRetained === true) continue;
+      const sessions = (task.sessions || []).map((entry) => entry.id).filter(Boolean);
+      if (!sessions.length) continue;
+      // Every source session must have a clean, current parse classifying it as
+      // machine work; one human or unverified session keeps the card active.
+      if (!sessions.every((id) => isConfirmedMachineDelegatedSession(cache.sessions[id], discoveredById?.get(id)?.sigKey || null))) continue;
+      const hasManualSubtask = (task.subtasks || []).some((subtask) => subtask?.source === "manual");
+      const hasLockedField = (task.lockedFields || []).some((field) => field !== "status");
+      const hasUserHistory = (task.history || []).some((entry) => entry?.by === "user" && entry.kind !== "create");
+      const referencedByOther = state.tasks.some(
+        (other) => other.id !== task.id && (other.relations || []).some((link) => link.taskId === task.id),
+      );
+      const ownerTouched =
+        task.origin === "auto+edited" ||
+        task.pinned === true ||
+        hasManualSubtask ||
+        hasLockedField ||
+        hasUserHistory ||
+        referencedByOther;
+      if (ownerTouched) {
+        if (task.archived !== true) {
+          dismissReview(task);
+          pushHistory(task, {
+            kind: "archive",
+            from: false,
+            to: true,
+            by: "ai",
+            note: t("来源为插件自动维护会话，已归档"),
+          });
+          task.archived = true;
+          touchRecoveredTask(task, state.recovery, 0);
+          changed += 1;
+        }
+        continue;
+      }
+      state.tasks = state.tasks.filter((candidate) => candidate.id !== task.id);
+      const suppress = sessions.filter((id) => !state.suppressedSessions.includes(id) && !findTaskBySession(id));
+      state.recovery.push({
+        task,
+        kind: "delete",
+        at: new Date().toISOString(),
+        suppressed: suppress,
+        automatic: "maintenance-session",
+      });
+      state.deletedLog.push({
+        id: task.id,
+        title: task.title,
+        origin: task.origin,
+        deletedAt: new Date().toISOString(),
+        sessionIds: sessions,
+        automatic: "maintenance-session",
+      });
+      if (suppress.length) state.suppressedSessions = [...new Set([...state.suppressedSessions, ...suppress])].slice(-500);
+      changed += 1;
+    }
+    if (changed) {
+      logInfo(`[super-kanban] retired ${changed} card(s) created for plugin maintenance sessions`);
+      schedulePersist();
+    }
+    return changed;
+  }
+
   function isCasualSession(meta) {
     return meta?.casualConversation === true && !meta.goalText && !meta.parseError && !parentToChildren.get(meta.id)?.length;
   }
@@ -1294,7 +1442,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       recordReviewSeen(sessionId, seq);
       return false;
     }
-    if (meta.origin === "subagent" || Number(meta.delegationDepth) > 0) {
+    if (meta.origin === "subagent" || Number(meta.delegationDepth) > 0 || isMachineDelegatedSession(meta)) {
       recordReviewSeen(sessionId, seq);
       return false;
     }
@@ -1472,6 +1620,8 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
 
   function isEligibleForAutoTask(meta, cutoff) {
     if (meta.origin !== "main") return false;
+    // A plugin's own maintenance run is machine work, not an owner task.
+    if (isMachineDelegatedSession(meta)) return false;
     if (!meta.hasUserMessages) return false;
     if (state.ignoredSessions.includes(meta.id)) return false;
     if (state.suppressedSessions.includes(meta.id)) return false;
@@ -1522,6 +1672,10 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     // Marks a parse that prefers session/title events over the projcache
     // placeholder. Stale caches from earlier versions re-parse once.
     meta.titleRev = 2;
+    // Marks a parse that classifies machine-delegated maintenance sessions.
+    // Caches written before this field existed re-parse once so the cards that
+    // those passes created are never resurrected by an unchanged log.
+    meta.delegatedRev = 1;
     meta.casualConversation = isCasualConversation(parsed);
     return { sigKey: meta.sigKey, meta };
   }
@@ -1652,6 +1806,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     };
     setScanMessage((t) => t("正在发现会话…"));
     scanDigestBytes = [];
+    scanRetiredMaintenanceCards = 0;
     broadcastScan(true);
     scanPromise = (async () => {
       let failure = null;
@@ -1713,9 +1868,9 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       persistCache();
     }
     broadcastScan(true);
-    emitChanged("scan", state.scan.newTasks + state.scan.updatedTasks);
+    emitChanged("scan", state.scan.newTasks + state.scan.updatedTasks + scanRetiredMaintenanceCards);
     logInfo(
-      `[super-kanban] scan ${failure ? "failed" : "done"} · processed=${state.scan.processed}/${state.scan.total} · new=${state.scan.newTasks} updated=${state.scan.updatedTasks} aiCalls=${state.scan.aiCalls}`,
+      `[super-kanban] scan ${failure ? "failed" : "done"} · processed=${state.scan.processed}/${state.scan.total} · new=${state.scan.newTasks} updated=${state.scan.updatedTasks}${scanRetiredMaintenanceCards ? ` retired=${scanRetiredMaintenanceCards}` : ""} aiCalls=${state.scan.aiCalls}`,
     );
   }
 
@@ -1729,6 +1884,16 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     broadcastScan(true);
 
     const cutoff = mode === "full" ? 0 : activeCutoff();
+    const discoveredById = new Map(discoverySessions.map((entry) => [entry.id, entry]));
+    const retirementCandidateSessions = new Set();
+    for (const task of state.tasks) {
+      if (!task || task.archived) continue;
+      if (task.review?.sessionId) retirementCandidateSessions.add(task.review.sessionId);
+      if (task.origin === "manual" || task.maintenanceRetained === true) continue;
+      for (const entry of task.sessions || []) {
+        if (entry?.id) retirementCandidateSessions.add(entry.id);
+      }
+    }
     const childSummaries = new Map();
     let lowValueSkipped = 0;
     let aiBudgetExhausted = false;
@@ -1755,9 +1920,15 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         let parsed = null;
         const activityAt = Math.max(Number(discovered.lastActivityAt) || 0, Number(meta?.lastActivityAt) || 0);
         // A changed log may contain a new turn even while the projection cache
-        // is stale. Unchanged historical logs only need their compact metadata.
+        // is stale. Unchanged historical logs only need their compact metadata,
+        // except when an active legacy card needs one-time `delegatedRev`
+        // classification so incremental scans can retire old maintenance cards.
         const latest = changed ? Math.max(activityAt, discovered.sig.mtimeMs) : activityAt || discovered.sig.mtimeMs;
-        if (latest < cutoff && !source.sessionLiveness(meta || discovered)) {
+        const needsMaintenanceCheck =
+          retirementCandidateSessions.has(discovered.id) &&
+          !cached?.meta?.parseError &&
+          (cached?.meta?.delegatedRev !== 1 || cached?.unparsed || changed);
+        if (latest < cutoff && !source.sessionLiveness(meta || discovered) && !needsMaintenanceCheck) {
           state.scan.historicalSkipped += 1;
           if (meta) {
             if (!cached) cache.sessions[discovered.id] = { sigKey: discovered.sigKey, meta, unparsed: true };
@@ -1784,7 +1955,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         // every incremental scan (the error path stores the current signature
         // for that reason). A later file change still retries via `changed`.
         const metadataStale =
-          Boolean(cached?.meta) && (cached.meta.titleRev !== 2 || typeof cached.meta.casualConversation !== "boolean") && !cached.meta.parseError;
+          Boolean(cached?.meta) && (cached.meta.titleRev !== 2 || typeof cached.meta.casualConversation !== "boolean" || cached.meta.delegatedRev !== 1) && !cached.meta.parseError;
         if (changed || cached?.unparsed || forceMainParse || metadataStale) {
           try {
             const result = parseDiscovered(discovered);
@@ -2084,6 +2255,11 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     }
 
     if (addedReviews > 0) emitChanged("turn-end", addedReviews);
+    // Repair cards that earlier scans created for a plugin's own maintenance
+    // sessions (they used to look like ordinary top-level sessions). Their
+    // source session is re-classified above, so the card has no owner meaning
+    // and must go; the sessions are suppressed so no later scan rebuilds them.
+    if (!scanCancel) scanRetiredMaintenanceCards = retireMaintenanceCards(state.scan.processed, discoveredById);
     // Phase D: persist derived board data + the human-readable scan conclusion.
     state.workspaces = computeWorkspaces(discovery.workspaces, [...sessionsById.values()]);
     state.activity = computeActivity();
@@ -2879,6 +3055,14 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
           note: archived ? t("用户归档") : t("用户恢复"),
         });
         task.archived = archived;
+        // Explicitly unarchiving a maintenance-sourced card records the owner's
+        // decision so the next scan does not automatically archive it again.
+        if (!archived && (
+          (task.sessions || []).some((entry) => isMachineDelegatedSession(cache.sessions[entry.id]?.meta)) ||
+          (task.history || []).some((entry) => entry?.kind === "archive" && entry.by === "ai" && entry.to === true)
+        )) {
+          task.maintenanceRetained = true;
+        }
         touchTask(task);
       }
       return task;
@@ -2914,6 +3098,10 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         }
         touchRecoveredTask(entry.beforeTarget, state.recovery, Date.parse(state.tasks[index].updatedAt) || 0);
         state.tasks[index] = entry.beforeTarget;
+      }
+      if (entry.automatic === "maintenance-session" ||
+          (entry.task.sessions || []).some((session) => isMachineDelegatedSession(cache.sessions[session.id]?.meta))) {
+        entry.task.maintenanceRetained = true;
       }
       touchRecoveredTask(entry.task, state.recovery, Date.parse(state.savedAt) || 0);
       state.tasks.push(entry.task);
@@ -3849,20 +4037,28 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         if (workspaceId && state.settings.excludeWorkspaces.includes(workspaceId)) return;
         // Pin the finished turn immediately: the card must appear even when the
         // scan is busy, deferred or disabled. The scan fills in the exact seq.
-        if (id && meta?.origin !== "subagent" && !(Number(meta?.delegationDepth) > 0)) {
+        if (id && meta?.origin !== "subagent" && !(Number(meta?.delegationDepth) > 0) && !isMachineDelegatedSession(meta)) {
           const task = primaryTaskForSession(id);
-          // Prefer the event's own sequence; the cached lastTurnEnd is the
-          // previous turn and would dedupe a fresh turn into nothing.
-          const liveSeq = Number(event?.seq) > 0 ? Number(event.seq) : 0;
-          const alreadySeen = liveSeq > 0 && (Number(state.reviewSeen[id]) || 0) >= liveSeq;
-          if (task && !alreadySeen && markTaskReview(task, {
-            sessionId: id,
-            seq: liveSeq,
-            at: Date.now(),
-            kind: event?.data?.reason?.kind || "completed",
-          })) {
-            schedulePersist();
-            emitChanged("turn-end", 1);
+          if (task) {
+            let liveMeta = meta;
+            if (liveMeta?.delegatedRev !== 1) liveMeta = classifyLiveSessionMeta(id, liveMeta);
+            const classifiedHuman =
+              !isMachineDelegatedSession(liveMeta) &&
+              !liveMeta?.parseError &&
+              (liveMeta?.delegatedRev === 1 || !liveMeta?.file);
+            // Prefer the event's own sequence; the cached lastTurnEnd is the
+            // previous turn and would dedupe a fresh turn into nothing.
+            const liveSeq = Number(event?.seq) > 0 ? Number(event.seq) : 0;
+            const alreadySeen = liveSeq > 0 && (Number(state.reviewSeen[id]) || 0) >= liveSeq;
+            if (classifiedHuman && !alreadySeen && markTaskReview(task, {
+              sessionId: id,
+              seq: liveSeq,
+              at: Date.now(),
+              kind: event?.data?.reason?.kind || "completed",
+            })) {
+              schedulePersist();
+              emitChanged("turn-end", 1);
+            }
           }
         }
         if (!state.settings.autoScan) return;
