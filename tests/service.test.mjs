@@ -2876,8 +2876,42 @@ test("upgrade scan settles legacy stale review/interrupted auto cards while prot
         card("t_criteria", { acceptanceCriteria: "检查测试输出" }),
         card("t_locked", { lockedFields: ["status"] }),
         card("t_recent", { lastActivityAt: recentAt }),
+        card("t_live_supporting", {
+          primarySessionId: "sess-old-primary",
+          sessions: [
+            { id: "sess-old-primary", title: "Old primary", seqEnd: 10, evidenceCount: 1 },
+            { id: "sess-live-support", title: "Live supporting", seqEnd: 4, evidenceCount: 1 },
+          ],
+        }),
       ];
       createStore({ dshHome: dir }).saveState(state);
+      // Seed an actively running supporting session (open turn) so the linked card is not settled.
+      const workspaceDir = path.join(dir, "workspace-demo");
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      const liveAt = Date.now() - 5_000;
+      const liveEvents = [
+        event("session", 1, liveAt, { id: "sess-live-support", createdAt: liveAt, cwd: workspaceDir }),
+        event("user/message", 2, liveAt + 500, { content: [{ type: "text", text: "继续联调" }] }),
+        event("turn/start", 3, liveAt + 1000, { turn: 1 }),
+      ];
+      writeFileDeep(path.join(dir, "sessions", "escaped-demo", "sess-live-support", SESSION_FILE_NAME), framesOf(liveEvents));
+      writeFileDeep(
+        path.join(dir, "storages", "workspace.json"),
+        JSON.stringify({
+          global: { workspaceIds: ["ws-demo"] },
+          tables: {
+            workspaces: {
+              "ws-demo": {
+                path: workspaceDir,
+                title: "Demo Workspace",
+                sessionIds: ["sess-live-support"],
+                createdAt: new Date(liveAt).toISOString(),
+                updatedAt: new Date(liveAt).toISOString(),
+              },
+            },
+          },
+        }),
+      );
     },
   });
 
@@ -2895,8 +2929,8 @@ test("upgrade scan settles legacy stale review/interrupted auto cards while prot
   assert.equal(byId.get("t_interrupted").status, "backlog");
   assert.equal(byId.get("t_interrupted").attention, null);
 
-  // User-owned, pinned, acceptance-gated, locked, and recent cards remain untouched.
-  for (const id of ["t_edited", "t_pinned", "t_criteria", "t_locked", "t_recent"]) {
+  // User-owned, pinned, acceptance-gated, locked, recent, and live-supporting cards remain untouched.
+  for (const id of ["t_edited", "t_pinned", "t_criteria", "t_locked", "t_recent", "t_live_supporting"]) {
     assert.equal(byId.get(id).status, "in_progress", `${id} status must remain in_progress`);
     assert.equal(byId.get(id).attention, "review", `${id} attention must remain review`);
   }

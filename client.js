@@ -7361,6 +7361,10 @@ button.sk-task-row-main{cursor:pointer}
       const [preview, setPreview] = React.useState(null);
       const [resetDays, setResetDays] = React.useState(() => Number(data.settings?.initialDays) || DEFAULT_INITIAL_DAYS);
       const [confirmResetDays, setConfirmResetDays] = React.useState(0);
+      React.useEffect(() => {
+        const next = Number(data.settings?.initialDays);
+        if (!confirmResetDays && Number.isFinite(next) && next >= 1) setResetDays(next);
+      }, [data.settings?.initialDays, confirmResetDays]);
       const autoTaskCount = (data.tasks || []).filter((task) => task.origin !== "manual").length;
       const resetOptions = [...new Set([3, 7, 14, 30, resetDays])].sort((a, b) => a - b);
       const run = async (action, message) => {

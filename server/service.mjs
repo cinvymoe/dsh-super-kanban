@@ -1362,12 +1362,18 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       if (locked.has("status")) continue;
       if (!["review", "interrupted", "waiting_user"].includes(task.attention)) continue;
       if (task.sessionContext?.isLive) continue;
-      const primaryMeta = task.primarySessionId
-        ? sessionsById.get(task.primarySessionId) || cache.sessions[task.primarySessionId]?.meta
-        : null;
-      if (primaryMeta && source.sessionLiveness(primaryMeta)) continue;
+      const linkedIds = new Set([task.primarySessionId, ...(task.sessions || []).map((entry) => entry?.id)].filter(Boolean));
+      let hasLiveSession = false;
+      for (const sid of linkedIds) {
+        const meta = sessionsById.get(sid) || cache.sessions[sid]?.meta;
+        if (meta && source.sessionLiveness(meta)) {
+          hasLiveSession = true;
+          break;
+        }
+      }
+      if (hasLiveSession) continue;
       if (trustedUnfinishedSubtasks(task).length > 0) continue;
-      const activityAt = Number(task.lastActivityAt) || Number(task.sessionContext?.lastActivityAt) || 0;
+      const activityAt = Math.max(Number(task.lastActivityAt) || 0, Number(task.sessionContext?.lastActivityAt) || 0);
       if (!activityAt || activityAt >= cutoff) continue;
 
       const from = task.status;

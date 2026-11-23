@@ -442,6 +442,8 @@ Host 只构造用户文本和助手文本消息。
 
 `acceptanceCriteria` 是用户填写的多行验收条件，上限 600 字。`task.create` 接受该字段，`task.update` 在 `patch` 中接受，空字符串清空。自动研判保留此字段。有验收条件的未完成任务在会话提供完成依据时标为 `attention: "acceptance"`。`task.accept` 写入 `completionBasis: "user"`，并保留子任务的人工勾选状态。显式合并保留双方验收条件，超出上限时返回错误，合并撤销恢复各自条件。
 
+`completionBasis` 取值为 `"user"`（人工验收）、`"session_goal"`（DSH 目标完成）、`"session_todos"`（本轮待办全部完成）或 `"history_completed"`（正常结束且沉寂超过 7 天的历史会话由 AI 研判完成）。沉寂超过 7 天的旧会话不会生成 `review` / `interrupted` / `waiting_user` 提示；其中 `history_completed` 卡片在关联会话重新活跃或产生新轮次时会自动重开为 `in_progress` 并清空 `completionBasis`。
+
 `writeOverlaps` 是最近 15 分钟内同一 Git 工作树和文件的写入证据分组，每组形如 `{ path, sessions: [{ id, at, seq }] }`。Host 从当前未结束轮次的成功 `write`、`edit` 结果提取证据。客户端只对至少两个由 DSH 确认运行中且没有待交互请求的会话显示提示。记录使用工作树相对路径，并保留来源会话和结果序号。
 
 - `GET /sessions?q=关键词` 返回至多 50 个可关联的会话元数据，支持会话 ID、标题、工作区和父会话查询。
