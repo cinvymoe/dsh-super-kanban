@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-11-23
+
 ### 修复
 
+- 首次扫描与历史回填不再把多日沉寂的旧会话堆满「待处理」与「待验收」。全新安装的默认活跃周期缩短为 7 天（设置补充 3 天档位，已有用户的活跃周期保留不变）；扩大周期或全量扫描纳入超过 7 天无活动的旧会话时，正常结束且由 AI 判定已完成的会话归入「已完成」（`history_completed`），其余沉寂旧会话归入「待办」并清空 `review` / `interrupted` / `waiting_user` 提醒；旧会话若产生新轮次则立即恢复活跃。升级后的扫描会自动清理存量未编辑自动卡上的陈旧待处理提示，不改动人工编辑、置顶、锁定或带验收条件的卡片。
 - 插件自己的后台维护会话不再变成任务卡。dsh-mnemon 的空闲审查从 v0.5.48 起改为独立顶层会话（`origin` 为 `main`、`delegationDepth` 为 0），看板原先只按「不是子代理」过滤，于是每次维护都会长出一张 `Mnemon · Idle review` 卡，AI 还会把审查里读到的检查点当成真实任务、在旁边建出重复卡。现在会话解析识别插件写在委托提示开头的标记（`[dsh-mnemon:delegated review]`），这类会话既不建卡也不参与证据归集；标记只认首个助手回复之前出现的，因此你在对话里引用同样的文字不会被误判。
 - 已经建出来的维护卡在下次扫描时自动收尾：没有动过的删除（写入 `recovery`，可用「恢复」撤销），你改过状态或锁定过字段的只归档、不删。
+
+### 改进
+
+- 扫描进度在 AI 研判阶段实时显示当日预算用量（`AI 研判 N/M（今日预算 U/L）`），扫描过程对预算消耗更透明。
+- 「待处理」视图在存在多项待确认卡片时提供「批量整理」入口，「列表」视图新增「仅显示待确认」快捷筛选与一键「确认完成」批量操作（`task.batch` 支持 `accept: true`）。
+- 「维护 → 扫描与存储」新增「重置自动任务并重扫」（`board.reset`），可选择 3 / 7 / 14 / 30 天等窗口清空自动卡片并重扫，自动保存恢复点并保留手动任务、自建项目、忽略清单与当日 AI 预算。
+- Historical backfill no longer floods Needs attention with stale review cards: fresh installs now default to a 7-day activity window (with a 3-day option), sessions inactive for over 7 days settle out of review/interrupted/waiting_user attention (AI-completed historical sessions settle as done, others as backlog, and upgrade scans clean up legacy untouched auto cards), AI scan progress displays live daily budget usage, list view adds an awaiting-review filter and bulk confirm-done action, and Maintenance adds a safe reset-auto-tasks-and-rescan action.
 - A plugin's own background maintenance session no longer becomes a task card. Since dsh-mnemon v0.5.48 its idle review runs as an ordinary top-level session, so the board's "not a subagent" filter no longer recognised it and added a card per pass. Cards built that way are retired on the next scan.
+
+感谢 [@huangbaba1992](https://github.com/huangbaba1992) 详细反馈首次扫描历史回填问题（[#18](https://github.com/topmindspace/dsh-super-kanban/issues/18)）。
 
 ## [0.10.5] - 2026-11-17
 
@@ -525,7 +537,8 @@ workspace into a maintainable task board.
   v0.5.0 model requests go through the DSH native model service — see the
   current SECURITY.md.)*
 
-[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.2...v0.10.3
