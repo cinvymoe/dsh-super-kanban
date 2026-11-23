@@ -30,7 +30,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 
 import { createSessionSource, RECENT_WRITE_MS } from "./sessions.mjs";
-import { analyzeSessionRules, isCasualConversation, normalizeAnalysis } from "./analyzer-rules.mjs";
+import { analyzeSessionRules, isCasualConversation, normalizeAnalysis, STALE_SESSION_DAYS } from "./analyzer-rules.mjs";
 import { createLlmAnalyzer } from "./analyzer-llm.mjs";
 import { llmOf } from "./native-llm.mjs";
 import { badRequest, classifyError, clipText, conflict, decodeId, isStringArray, json, notFound, readBody } from "./http.mjs";
@@ -43,6 +43,7 @@ import {
   AI_CALLS_PER_SCAN_MAX,
   AI_CALLS_PER_SCAN_MIN,
   ARTIFACT_LIMIT,
+  createEmptyCache,
   createStore,
   DEFAULT_SETTINGS,
   EVIDENCE_LIMIT,
@@ -1069,10 +1070,16 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       task.attention = attention;
       changed = true;
     }
-    if (task.status === "done" && !locked.has("status") && context?.attention && !task.completionBasis) {
+    if (
+      task.status === "done" &&
+      !locked.has("status") &&
+      (context?.attention || (task.completionBasis === "history_completed" && context?.sessionContext?.isLive)) &&
+      (!task.completionBasis || task.completionBasis === "history_completed")
+    ) {
       task.status = "in_progress";
+      task.completionBasis = null;
       if (!locked.has("progress")) task.progress = progressFromSubtasks(task.subtasks);
-      task.attention = context.attention;
+      task.attention = context?.attention || null;
       changed = true;
     }
     if (context?.sessionGoal && (!task.goal || !task.goal.text)) {
@@ -1334,6 +1341,85 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       schedulePersist();
     }
     return changed;
+  }
+
+  const STALE_AWAITING_BASIS_RE = /(?:等待完成依据|awaiting completion evidence)/i;
+
+  /**
+   * Upgrade-safe cleanup for historical auto cards created by earlier versions
+   * (or lingering past the stale window) that still carry active review /
+   * interrupted / waiting_user attention. Never touches manual, edited, pinned,
+   * locked-status, acceptance-criteria, live, or unfinished-user-subtask cards.
+   */
+  function retireStaleReviewAttention() {
+    const cutoff = Date.now() - STALE_SESSION_DAYS * DAY;
+    let settled = 0;
+    for (const task of state.tasks) {
+      if (!task || task.archived || task.origin !== "auto") continue;
+      if (task.pinned || task.acceptanceCriteria) continue;
+      if (task.status === "done") continue;
+      const locked = new Set(Array.isArray(task.lockedFields) ? task.lockedFields : []);
+      if (locked.has("status")) continue;
+      if (!["review", "interrupted", "waiting_user"].includes(task.attention)) continue;
+      if (task.sessionContext?.isLive) continue;
+      const primaryMeta = task.primarySessionId
+        ? sessionsById.get(task.primarySessionId) || cache.sessions[task.primarySessionId]?.meta
+        : null;
+      if (primaryMeta && source.sessionLiveness(primaryMeta)) continue;
+      if (trustedUnfinishedSubtasks(task).length > 0) continue;
+      const activityAt = Number(task.lastActivityAt) || Number(task.sessionContext?.lastActivityAt) || 0;
+      if (!activityAt || activityAt >= cutoff) continue;
+
+      const from = task.status;
+      if (
+        task.attention === "review" &&
+        task.status === "in_progress" &&
+        task.ai?.engine === "llm" &&
+        STALE_AWAITING_BASIS_RE.test(task.ai?.reason || "")
+      ) {
+        task.status = "done";
+        task.completionBasis = "history_completed";
+        task.attention = null;
+        dismissReview(task);
+        closeSubtasksForDoneTask(task);
+        if (!locked.has("progress") && trustedUnfinishedSubtasks(task).length === 0) task.progress = 100;
+        syncGoalStatus(task);
+        pushHistory(task, {
+          kind: "status",
+          from,
+          to: "done",
+          by: "ai",
+          note: t("历史会话已多日无活动，按先前的完成研判归入已完成"),
+        });
+      } else {
+        task.attention = null;
+        if (task.status === "in_progress") {
+          task.status = "backlog";
+          syncGoalStatus(task);
+          pushHistory(task, {
+            kind: "status",
+            from,
+            to: "backlog",
+            by: "ai",
+            note: t("历史会话已多日无活动，移出待处理"),
+          });
+        } else {
+          pushHistory(task, {
+            kind: "ai",
+            by: "ai",
+            note: t("历史会话已多日无活动，清除待处理提示"),
+          });
+        }
+      }
+      touchTask(task);
+      truncateTask(task);
+      settled += 1;
+    }
+    if (settled > 0) {
+      logInfo(`[super-kanban] settled ${settled} stale historical attention card(s)`);
+      schedulePersist();
+    }
+    return settled;
   }
 
   function isCasualSession(meta) {
@@ -2061,6 +2147,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
           state.scan.aiPending = aiJobs.length;
           logWarn(`[super-kanban] AI route unavailable (${route.reason}); rules only this scan`);
         } else {
+          const dailyLimit = Number(state.settings.dailyAiCallLimit) || DEFAULT_SETTINGS.dailyAiCallLimit;
           const perScanLimit = perScanAiLimit();
           // The contract defines the scan budget as min(due sessions, per-scan
           // limit, daily remaining); capping at the due count also keeps the
@@ -2068,6 +2155,8 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
           const scanBudget = Math.max(0, Math.min(perScanLimit, dailyRemaining, aiJobs.length));
           const dailyCapped = dailyRemaining <= perScanLimit;
           state.scan.aiBudget = scanBudget;
+          state.scan.aiDailyUsed = state.usage.budgetUsed;
+          state.scan.aiDailyLimit = dailyLimit;
           analyzer.resetBudget(scanBudget);
           if (scanBudget <= 0) {
             aiDeferredReason = "daily";
@@ -2131,6 +2220,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
                 }),
               );
               state.scan.aiBudgetUsed = readAnalyzerBudget().calls;
+              state.scan.aiDailyUsed = state.usage.budgetUsed;
               setScanMessage((t) => t("AI 研判 {0}/{1} 个会话（今日 {2}/{3}）…", [state.scan.aiBudgetUsed, aiJobs.length, state.usage.budgetUsed, state.settings.dailyAiCallLimit]));
               broadcastScan();
               if (phaseTimeout.aborted) {
@@ -2141,6 +2231,7 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
           }
           const budgetAfter = readAnalyzerBudget();
           state.scan.aiBudgetUsed = budgetAfter.calls;
+          state.scan.aiDailyUsed = state.usage.budgetUsed;
           state.scan.aiAttempts = budgetAfter.attempts;
           state.scan.aiPending = state.settings.aiEnabled ? aiJobs.filter((job) => !job.llm && isAiCandidate(job)).length : 0;
           if (state.scan.aiPending && dailyAiRemaining() <= 0) aiDeferredReason = "daily";
@@ -2259,7 +2350,9 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     // sessions (they used to look like ordinary top-level sessions). Their
     // source session is re-classified above, so the card has no owner meaning
     // and must go; the sessions are suppressed so no later scan rebuilds them.
-    if (!scanCancel) scanRetiredMaintenanceCards = retireMaintenanceCards(state.scan.processed, discoveredById);
+    if (!scanCancel) {
+      scanRetiredMaintenanceCards = retireMaintenanceCards(state.scan.processed, discoveredById) + retireStaleReviewAttention();
+    }
     // Phase D: persist derived board data + the human-readable scan conclusion.
     state.workspaces = computeWorkspaces(discovery.workspaces, [...sessionsById.values()]);
     state.activity = computeActivity();
@@ -2427,6 +2520,24 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
     if (!rules || options.engine !== "llm") return analysis;
     if (analysis.status !== "done" || rules.completionBasis) {
       return { ...analysis, attention: analysis.status === "done" ? null : rules.attention, completionBasis: rules.completionBasis };
+    }
+    if (rules.staleCompleted) {
+      return {
+        ...analysis,
+        status: "done",
+        progress: 100,
+        attention: null,
+        completionBasis: "history_completed",
+      };
+    }
+    if (Number(rules.daysIdle) > STALE_SESSION_DAYS) {
+      return {
+        ...analysis,
+        status: rules.status === "blocked" ? "blocked" : "backlog",
+        progress: rules.progress,
+        attention: rules.attention ?? null,
+        completionBasis: null,
+      };
     }
     return {
       ...analysis,
@@ -3144,11 +3255,18 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       const hasProject = Object.hasOwn(payload, "projectId");
       const projectId = hasProject ? projectAssignment(payload.projectId) : null;
       const hasStatus = Object.hasOwn(payload, "status");
+      const accept = payload.accept === true;
       if (hasStatus && !STATUSES.includes(payload.status)) throw badRequest(t("无效任务状态"));
-      if (typeof payload.archived !== "boolean" && !PRIORITIES.includes(payload.priority) && !hasProject && !hasStatus) throw badRequest(t("请选择批量操作"));
+      if (accept && hasStatus) throw badRequest(t("批量确认完成不能与批量状态同时使用"));
+      if (typeof payload.archived !== "boolean" && !PRIORITIES.includes(payload.priority) && !hasProject && !hasStatus && !accept) throw badRequest(t("请选择批量操作"));
+      if (accept && payload.archived !== false && targets.some((task) => task.archived)) {
+        throw conflict(t("请先恢复归档任务再确认验收"));
+      }
       for (const task of targets) {
-        if (hasStatus) ops["task.update"]({ id: task.id, patch: { status: payload.status }, lockFields: ["status"] });
-        if (typeof payload.archived === "boolean") ops["task.archive"]({ id: task.id, archived: payload.archived });
+        if (payload.archived === false) ops["task.archive"]({ id: task.id, archived: false });
+        if (accept) ops["task.accept"]({ id: task.id });
+        else if (hasStatus) ops["task.update"]({ id: task.id, patch: { status: payload.status }, lockFields: ["status"] });
+        if (payload.archived === true) ops["task.archive"]({ id: task.id, archived: true });
         if (PRIORITIES.includes(payload.priority)) ops["task.update"]({ id: task.id, patch: { priority: payload.priority }, lockFields: ["priority"] });
         if (hasProject && task.projectId !== projectId) ops["task.update"]({ id: task.id, patch: { projectId } });
       }
@@ -3699,6 +3817,48 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
       broadcastScan(true);
       return { cancelling: true };
     },
+
+    "board.reset"(payload) {
+      if (scanPromise || aiBusy) throw conflict(t("请等待扫描或研判结束后再重置"));
+      const keepManual = payload.keepManual !== false;
+      let nextDays = state.settings.initialDays;
+      if (payload.days !== undefined && payload.days !== null) {
+        const numeric = typeof payload.days === "boolean" || (typeof payload.days === "string" && !payload.days.trim())
+          ? Number.NaN
+          : Number(payload.days);
+        if (!Number.isFinite(numeric) || numeric < 1 || numeric > 365) {
+          throw badRequest(t("活跃周期必须为 1–365 天"));
+        }
+        nextDays = Math.round(numeric);
+      }
+      try {
+        store.saveRestorePoint(state);
+      } catch {
+        throw Object.assign(new Error(t("无法保存当前看板的恢复点")), { code: "storage-unavailable" });
+      }
+      const keptTasks = keepManual ? state.tasks.filter((task) => task.origin === "manual") : [];
+      const removed = state.tasks.length - keptTasks.length;
+      const keptIds = new Set(keptTasks.map((task) => task.id));
+      for (const task of keptTasks) {
+        if (Array.isArray(task.relations) && task.relations.length) {
+          task.relations = task.relations.filter((link) => keptIds.has(link.taskId));
+        }
+      }
+      state.tasks = keptTasks;
+      state.recovery = (state.recovery || []).filter(
+        (entry) => keepManual && entry?.task?.origin === "manual" && (entry.kind !== "merge" || keptIds.has(entry.beforeTarget?.id)),
+      );
+      state.suppressedSessions = [];
+      state.settings = { ...state.settings, initialDays: nextDays, lastScanAt: null };
+      state.scan = emptyScanState();
+      state.activity = computeActivity();
+      return {
+        removed,
+        kept: keptTasks.length,
+        initialDays: nextDays,
+        rescanStarted: false,
+      };
+    },
   };
 
   /* ------------------------------ routes --------------------------- */
@@ -3923,7 +4083,16 @@ export function createKanbanService({ ctx, aiScanMaxMs, aiCatalogTimeoutMs } = {
         try {
           const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
           const direct = ["task.continuePrompt", "task.analyze", "task.polishPrompt", "backup.preview"].includes(op) || op.startsWith("scan.");
-          const data = direct ? await handler(payload) : commitState(() => handler(payload), op.startsWith("task.") ? "task" : "settings");
+          let data = direct ? await handler(payload) : commitState(() => handler(payload), op.startsWith("task.") ? "task" : "settings");
+          if (op === "board.reset") {
+            cache = createEmptyCache();
+            sessionsById.clear();
+            persistCache();
+            if (payload.rescan !== false) {
+              const started = startScan("incremental");
+              data = { ...data, rescanStarted: Boolean(started?.ok) };
+            }
+          }
           const projected = op.startsWith("task.") && data && typeof data === "object"
             ? data.task ? { ...data, task: textProjection.task(data.task) }
               : data.id && data.title ? textProjection.task(data) : data

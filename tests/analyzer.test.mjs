@@ -282,3 +282,57 @@ test("a normally ended turn that requests a decision remains actionable", () => 
   assert.equal(result.progress, null);
   assert.equal(result.completionBasis, null);
 });
+
+test("stale historical sessions settle out of review/interrupted/waiting_user attention", () => {
+  const staleAt = Date.now() - 12 * 86_400_000;
+  const recentAt = Date.now() - 2 * 3_600_000;
+  const base = (overrides = {}) => ({
+    id: "stale-fixture",
+    title: "历史会话任务",
+    users: [
+      { seq: 2, text: "帮我优化配置" },
+      { seq: 4, text: "这里还是不对，帮我再改一下" },
+    ],
+    assistants: [{ seq: 5, text: "已修改完成。" }],
+    todoSnapshots: [],
+    turnStarts: [{ seq: 1 }],
+    lastTurnEnd: { seq: 6, kind: "completed" },
+    lastActivityAt: staleAt,
+    isLive: false,
+    errors: [],
+    toolCalls: [],
+    deliverables: [],
+    ...overrides,
+  });
+
+  const staleCompleted = analyzeSessionRules(base()).tasks[0];
+  assert.equal(staleCompleted.status, "backlog");
+  assert.equal(staleCompleted.attention, null);
+  assert.equal(staleCompleted.staleCompleted, true);
+  assert.deepEqual(staleCompleted.issues, [], "stale completed sessions do not surface old mid-session feedback as unresolved issues");
+
+  const recentCompleted = analyzeSessionRules(base({ lastActivityAt: recentAt })).tasks[0];
+  assert.equal(recentCompleted.status, "in_progress");
+  assert.equal(recentCompleted.attention, "review");
+  assert.equal(recentCompleted.staleCompleted, false);
+
+  const staleInterrupted = analyzeSessionRules(base({ lastTurnEnd: { seq: 6, kind: "interrupted" } })).tasks[0];
+  assert.equal(staleInterrupted.status, "backlog");
+  assert.equal(staleInterrupted.attention, null);
+
+  const recentInterrupted = analyzeSessionRules(base({ lastActivityAt: recentAt, lastTurnEnd: { seq: 6, kind: "interrupted" } })).tasks[0];
+  assert.equal(recentInterrupted.status, "in_progress");
+  assert.equal(recentInterrupted.attention, "interrupted");
+
+  const staleDecision = analyzeSessionRules(base({
+    assistants: [{ seq: 5, text: "请先确认方案，我再继续实现。" }],
+  })).tasks[0];
+  assert.equal(staleDecision.status, "backlog");
+  assert.equal(staleDecision.attention, null);
+
+  const staleTodo = analyzeSessionRules(base({
+    todoSnapshots: [{ seq: 5, todos: [{ content: "补充文档", status: "pending" }] }],
+  })).tasks[0];
+  assert.equal(staleTodo.status, "backlog");
+  assert.equal(staleTodo.attention, null);
+});

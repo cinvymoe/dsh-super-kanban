@@ -2734,3 +2734,266 @@ test("retirement defers when a maintenance session fails to parse", async (t) =>
   assert.equal(after.tasks.length, 1, "card is not retired when its source log fails to parse");
   assert.equal(after.recovery.length, 0);
 });
+
+test("first scan defaults to 7 days and backfilled stale sessions never flood review attention", async (t) => {
+  const recentAt = Date.now() - 2 * 3_600_000;
+  const oldAt = Date.now() - 14 * 86_400_000;
+  const llm = {
+    listProviders: () => [{ id: "fake" }],
+    async *stream({ messages }) {
+      const prompt = messages[0].content[0].text;
+      const title = prompt.includes("Old interrupted") ? "Old interrupted"
+        : prompt.includes("Old completed") ? "Old completed" : "Recent work";
+      yield { type: "text-delta", text: JSON.stringify({ tasks: [{ title, status: "done", progress: 100, reason: "Finished work" }] }) };
+      yield { type: "finish", reason: { kind: "stop" } };
+    },
+  };
+  let oldFile = "";
+  const { service } = await setup(t, {
+    ctx: { get: (name) => ({ llm, agentDefaultModel: { currentSelection: () => ({ provider: "fake", model: "fake" }) } })[name] },
+    prepare(dir) {
+      const writeRichSession = (sessionId, title, time, endKind = "completed") => {
+        const workspaceDir = path.join(dir, "workspace-demo");
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        writeFileDeep(path.join(workspaceDir, `${sessionId}.md`), "# report\n");
+        const events = [
+          event("session", 1, time, { id: sessionId, createdAt: time, cwd: workspaceDir }),
+          event("session/title", 2, time + 500, { title, source: { kind: "provider" } }),
+          event("user/message", 3, time + 1000, { content: [{ type: "text", text: `Task: ${title}` }] }),
+          event("turn/start", 4, time + 1500, { turn: 1 }),
+          event("assistant/message", 5, time + 2000, { message: { content: [{ type: "text", text: "Done step 1" }] } }),
+          event("user/message", 6, time + 2500, { content: [{ type: "text", text: "Please wrap up" }] }),
+          event("deliverables/presented", 7, time + 3000, { files: [{ path: `${sessionId}.md`, description: "report" }] }),
+          event("turn/end", 8, time + 3500, { turn: 1, reason: { kind: endKind } }),
+        ];
+        const file = path.join(dir, "sessions", "escaped-demo", sessionId, SESSION_FILE_NAME);
+        writeFileDeep(file, framesOf(events));
+        fs.utimesSync(file, time / 1000, time / 1000);
+        writeFileDeep(
+          path.join(dir, "storages", "session_projcache", "sessions", `${sessionId}.json`),
+          JSON.stringify({
+            record: {
+              identity: { createdAt: time, cwd: workspaceDir },
+              rows: { title: { val: title }, sessionStats: { val: { turns: 1 } }, timeContext: { val: { lastMessageTime: time + 3500 } } },
+            },
+          }),
+        );
+        return file;
+      };
+      writeRichSession("sess-recent", "Recent work", recentAt, "completed");
+      oldFile = writeRichSession("sess-old-done", "Old completed", oldAt, "completed");
+      writeRichSession("sess-old-int", "Old interrupted", oldAt, "interrupted");
+      writeFileDeep(
+        path.join(dir, "storages", "workspace.json"),
+        JSON.stringify({
+          global: { workspaceIds: ["ws-demo"] },
+          tables: {
+            workspaces: {
+              "ws-demo": {
+                path: path.join(dir, "workspace-demo"),
+                title: "Demo Workspace",
+                sessionIds: ["sess-recent", "sess-old-done", "sess-old-int"],
+                createdAt: new Date(oldAt).toISOString(),
+                updatedAt: new Date(recentAt).toISOString(),
+              },
+            },
+          },
+        }),
+      );
+    },
+  });
+
+  // First scan with default initialDays=7 only brings in the recent session.
+  await command(service, "scan.start", { mode: "incremental" });
+  await waitForScan(service);
+  const initial = (await request(service, { route: "/state" })).json;
+  assert.equal(initial.settings.initialDays, 7);
+  assert.equal(initial.scan.historicalSkipped, 2);
+  assert.equal(initial.scan.aiDailyLimit, 150);
+  assert.equal(initial.scan.aiDailyUsed, 1);
+  assert.equal(initial.tasks.length, 1);
+  assert.equal(initial.tasks[0].primarySessionId, "sess-recent");
+  assert.equal(initial.tasks[0].status, "in_progress", "recent session without completion basis stays awaiting review");
+  assert.equal(initial.tasks[0].attention, "review");
+
+  // Expanding to 30 days backfills stale sessions without flooding review attention.
+  await command(service, "settings.update", { patch: { initialDays: 30 } });
+  await command(service, "scan.start", { mode: "incremental" });
+  await waitForScan(service);
+  const wide = (await request(service, { route: "/state" })).json;
+  const oldDone = wide.tasks.find((task) => task.primarySessionId === "sess-old-done");
+  const oldInt = wide.tasks.find((task) => task.primarySessionId === "sess-old-int");
+  assert.equal(oldDone.status, "done");
+  assert.equal(oldDone.completionBasis, "history_completed");
+  assert.equal(oldDone.attention, null);
+  assert.equal(oldInt.status, "backlog", "stale interrupted session is never forced into review");
+  assert.equal(oldInt.attention, null);
+
+  // If the stale session resumes with a fresh turn, it returns to active review flow.
+  const resumedAt = Date.now() - 10_000;
+  fs.appendFileSync(oldFile, framesOf([
+    event("user/message", 9, resumedAt, { content: [{ type: "text", text: "继续完善一下" }] }),
+    event("turn/start", 10, resumedAt + 100, { turn: 2 }),
+    event("assistant/message", 11, resumedAt + 200, { message: { content: [{ type: "text", text: "已补充" }] } }),
+    event("turn/end", 12, resumedAt + 300, { turn: 2, reason: { kind: "completed" } }),
+  ]));
+  await command(service, "scan.start", { mode: "incremental" });
+  await waitForScan(service);
+  const resumed = (await request(service, { route: "/state" })).json.tasks.find((task) => task.primarySessionId === "sess-old-done");
+  assert.equal(resumed.status, "in_progress");
+  assert.equal(resumed.attention, "review");
+});
+
+test("upgrade scan settles legacy stale review/interrupted auto cards while protecting user-owned cards", async (t) => {
+  const oldAt = Date.now() - 15 * 86_400_000;
+  const recentAt = Date.now() - 3_600_000;
+  const { service } = await setup(t, {
+    prepare(dir) {
+      const state = createEmptyState();
+      const card = (id, overrides = {}) => ({
+        id,
+        title: `Card ${id}`,
+        status: "in_progress",
+        attention: "review",
+        origin: "auto",
+        priority: "P2",
+        lastActivityAt: oldAt,
+        createdAt: new Date(oldAt).toISOString(),
+        updatedAt: new Date(oldAt).toISOString(),
+        lockedFields: [],
+        sessions: [],
+        subtasks: [],
+        history: [],
+        ...overrides,
+      });
+      state.tasks = [
+        card("t_llm_done", { ai: { engine: "llm", reason: "已完成；等待完成依据" } }),
+        card("t_llm_done_en", { ai: { engine: "llm", reason: "All done; awaiting completion evidence" } }),
+        card("t_rules_stale", { ai: { engine: "rules", reason: "本轮已结束，任务完成情况待确认" } }),
+        card("t_interrupted", { status: "backlog", attention: "interrupted" }),
+        card("t_edited", { origin: "auto+edited" }),
+        card("t_pinned", { pinned: true }),
+        card("t_criteria", { acceptanceCriteria: "检查测试输出" }),
+        card("t_locked", { lockedFields: ["status"] }),
+        card("t_recent", { lastActivityAt: recentAt }),
+      ];
+      createStore({ dshHome: dir }).saveState(state);
+    },
+  });
+
+  await command(service, "scan.start", { mode: "incremental" });
+  await waitForScan(service);
+  const byId = new Map((await request(service, { route: "/state" })).json.tasks.map((task) => [task.id, task]));
+
+  assert.equal(byId.get("t_llm_done").status, "done");
+  assert.equal(byId.get("t_llm_done").completionBasis, "history_completed");
+  assert.equal(byId.get("t_llm_done").attention, null);
+  assert.equal(byId.get("t_llm_done_en").status, "done");
+  assert.equal(byId.get("t_llm_done_en").completionBasis, "history_completed");
+  assert.equal(byId.get("t_rules_stale").status, "backlog");
+  assert.equal(byId.get("t_rules_stale").attention, null);
+  assert.equal(byId.get("t_interrupted").status, "backlog");
+  assert.equal(byId.get("t_interrupted").attention, null);
+
+  // User-owned, pinned, acceptance-gated, locked, and recent cards remain untouched.
+  for (const id of ["t_edited", "t_pinned", "t_criteria", "t_locked", "t_recent"]) {
+    assert.equal(byId.get(id).status, "in_progress", `${id} status must remain in_progress`);
+    assert.equal(byId.get(id).attention, "review", `${id} attention must remain review`);
+  }
+});
+
+test("task.batch accepts selected tasks cleanly and rejects conflicting or archived-without-restore input", async (t) => {
+  const { service } = await setup(t);
+  const a = (await command(service, "task.create", { title: "Review A", status: "in_progress" })).json.data;
+  const b = (await command(service, "task.create", { title: "Review B", status: "in_progress" })).json.data;
+  const c = (await command(service, "task.create", { title: "Archived C", status: "in_progress" })).json.data;
+  await command(service, "task.archive", { id: c.id, archived: true });
+
+  const conflictStatus = await command(service, "task.batch", { ids: [a.id], accept: true, status: "done" });
+  assert.equal(conflictStatus.status, 400);
+
+  const archivedReject = await command(service, "task.batch", { ids: [a.id, c.id], accept: true });
+  assert.equal(archivedReject.status, 409);
+  const afterReject = (await request(service, { route: "/state" })).json.tasks.find((task) => task.id === a.id);
+  assert.equal(afterReject.status, "in_progress", "rejected batch must roll back atomically");
+
+  const ok = await command(service, "task.batch", { ids: [a.id, b.id], accept: true });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.data.count, 2);
+  const tasks = new Map((await request(service, { route: "/state" })).json.tasks.map((task) => [task.id, task]));
+  for (const id of [a.id, b.id]) {
+    assert.equal(tasks.get(id).status, "done");
+    assert.equal(tasks.get(id).completionBasis, "user");
+    assert.equal(tasks.get(id).attention, null);
+    assert.ok(tasks.get(id).lockedFields.includes("status"));
+  }
+});
+
+test("board.reset saves a restore point, clears auto cards, preserves manual/usage/ignored data and rescans with the new window", async (t) => {
+  const recentAt = Date.now() - 2 * 3_600_000;
+  const oldAt = Date.now() - 10 * 86_400_000;
+  const { home, service } = await setup(t, {
+    prepare(dir) {
+      seedSessionHome(dir, { sessionId: "sess-recent", title: "Recent work", time: recentAt });
+      const oldSession = seedSessionHome(dir, { sessionId: "sess-old", title: "Old work", time: oldAt });
+      fs.utimesSync(path.join(oldSession.sessionDir, SESSION_FILE_NAME), oldAt / 1000, oldAt / 1000);
+      // Merge both session ids into workspace registry.
+      const wsFile = path.join(dir, "storages", "workspace.json");
+      const ws = JSON.parse(fs.readFileSync(wsFile, "utf8"));
+      ws.tables.workspaces["ws-demo"].sessionIds = ["sess-recent", "sess-old"];
+      fs.writeFileSync(wsFile, JSON.stringify(ws));
+      const state = createEmptyState();
+      state.settings.initialDays = 30;
+      state.usage.budgetUsed = 17;
+      state.usage.calls = 15;
+      state.ignoredSessions = ["sess-ignored"];
+      state.suppressedSessions = ["sess-recent"];
+      state.reviewSeen = { "sess-recent": 10 };
+      const projectId = `p_${"0".repeat(8)}-${"0".repeat(4)}-${"0".repeat(4)}-${"0".repeat(4)}-${"0".repeat(12)}`;
+      state.projects = [{ id: projectId, name: "Keep Project", notes: "", dueDate: null, workspaceId: null, archived: false, updatedAt: new Date().toISOString() }];
+      state.tasks = [
+        {
+          id: "t_auto_old", title: "Old auto", status: "in_progress", attention: "review", origin: "auto",
+          priority: "P2", lastActivityAt: oldAt, createdAt: new Date(oldAt).toISOString(), updatedAt: new Date(oldAt).toISOString(),
+          lockedFields: [], sessions: [], subtasks: [], history: [], relations: [],
+        },
+        {
+          id: "t_manual_keep", title: "Manual card", status: "backlog", origin: "manual", projectId,
+          priority: "P1", lastActivityAt: recentAt, createdAt: new Date(recentAt).toISOString(), updatedAt: new Date(recentAt).toISOString(),
+          lockedFields: [], sessions: [], subtasks: [], history: [],
+          relations: [{ type: "related", taskId: "t_auto_old" }],
+        },
+      ];
+      createStore({ dshHome: dir }).saveState(state);
+    },
+  });
+
+  assert.equal((await command(service, "board.reset", { days: 0 })).status, 400);
+  assert.equal((await command(service, "board.reset", { days: true })).status, 400);
+  assert.equal((await command(service, "board.reset", { days: "" })).status, 400);
+
+  const reset = await command(service, "board.reset", { days: 3, keepManual: true, rescan: true });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.json.data.removed, 1);
+  assert.equal(reset.json.data.kept, 1);
+  assert.equal(reset.json.data.initialDays, 3);
+  assert.equal(reset.json.data.rescanStarted, true);
+  await waitForScan(service);
+
+  const backupsDir = path.join(home, "storages", "super-kanban", "backups");
+  assert.ok(fs.existsSync(path.join(backupsDir, "before-restore.json")), "reset writes a restore point");
+
+  const persisted = readStateFile(home);
+  assert.equal(persisted.settings.initialDays, 3);
+  assert.equal(persisted.usage.budgetUsed, 17, "daily AI budget usage is never reset");
+  assert.deepEqual(persisted.ignoredSessions, ["sess-ignored"]);
+  assert.deepEqual(persisted.suppressedSessions, []);
+  assert.equal(persisted.reviewSeen["sess-recent"], 10);
+  assert.equal(persisted.projects.length, 1);
+
+  const manual = persisted.tasks.find((task) => task.id === "t_manual_keep");
+  assert.ok(manual, "manual card is preserved");
+  assert.deepEqual(manual.relations, [], "dangling relation to cleared auto card is cleaned up");
+  assert.ok(persisted.tasks.some((task) => task.primarySessionId === "sess-recent"), "recent session within 3 days is rescanned");
+  assert.ok(!persisted.tasks.some((task) => task.primarySessionId === "sess-old"), "10-day-old session stays outside 3-day window");
+});

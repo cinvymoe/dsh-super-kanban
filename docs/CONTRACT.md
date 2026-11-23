@@ -200,6 +200,8 @@ type Priority = "P0" | "P1" | "P2" | "P3";
     "aiDue": 5,                              // 本轮需要 AI 研判的会话数
     "aiBudget": 5,                           // 本次解析后的预算（按 aiBudgetMode）
     "aiBudgetUsed": 4,                       // 本轮已消耗的研判预算单位，包含失败
+    "aiDailyUsed": 15,                       // 本轮 AI 阶段实时同步的当日已用预算单位
+    "aiDailyLimit": 150,                     // 本轮 AI 阶段实时同步的当日预算上限
     "aiAttempts": 3,                         // 本次实际 provider attempt 次数（含内部重试）
     "aiPending": 2,                          // 本次未拿到 AI 结论、下次继续的会话数（含失败待重试）
     "aiDeferredReason": null,                // null|"budget"|"time"|"daily"
@@ -214,7 +216,7 @@ type Priority = "P0" | "P1" | "P2" | "P3";
     "aiProvider": "",                       // 与 aiModel 成对，空串表示跟随 DSH 默认
     "aiModel": "",
     "aiBudgetMode": "auto",                 // v0.5：auto（默认）=min(待研判, 每日剩余)；fixed=用 maxAiCallsPerScan
-    "initialDays": 30,                       // 近期视图与增量扫描的滚动活跃周期，1–365 天
+    "initialDays": 7,                        // 近期视图与增量扫描的滚动活跃周期，1–365 天（新装默认 7 天）
     "maxTasksPerSession": 3,                // 单会话单次扫描最多产出的自动卡数
     "excludeWorkspaces": [],
     "lastScanAt": "ISO|null",
@@ -448,7 +450,8 @@ Host 只构造用户文本和助手文本消息。
 - `task.linkSession` 接受 `{ id, sessionId, primary?, continuation?, remove? }`。续做会话被设为主会话，旧会话可继续补充产物与证据。
 - `task.relate` 接受 `{ id, taskId, type, remove? }`。类型为 `parent`、`depends_on`、`related`，父子与依赖关系分别检查循环。
 - `task.issue` 接受 `{ id, text, resolve? }`。手动记录的问题和已解决的同名问题在后台刷新后保留。
-- `task.batch` 接受 `{ ids, status?, archived?, priority?, projectId? }`，单次最多 200 项。批量状态沿用 `task.update` 的状态变更语义并锁定状态。`task.pin` 接受 `{ id, pinned }`。
+- `task.batch` 接受 `{ ids, status?, accept?, archived?, priority?, projectId? }`，单次最多 200 项。批量状态沿用 `task.update` 的状态变更语义并锁定状态；`accept: true` 沿用 `task.accept` 的确认完成语义（不可与 `status` 同时传入，未同时传 `archived: false` 时拒绝已归档任务）。`task.pin` 接受 `{ id, pinned }`。
+- `board.reset` 接受 `{ days?, keepManual?, rescan? }`。扫描或研判进行中返回 409；先写入恢复点，默认保留手动任务（`keepManual !== false`）和自建项目、清理失效关系、重置自动任务与会话缓存，并保留当日 `usage`、`ignoredSessions` 与 `reviewSeen`；`days`（1–365）同步更新 `settings.initialDays`，`rescan !== false` 时在提交后立即触发增量重扫。
 - `task.merge` 接受 `{ id, sourceId, expectedUpdatedAt?, expectedSourceUpdatedAt? }`。主会话优先保留目标任务的主会话，合并后的会话按人工关联处理。删除和合并记录可用 `task.restore` 恢复。合并后目标版本发生变化时，撤销返回冲突以保护新修改。
 - `backup.preview` 接受 `{ backup }`，返回当前和待恢复的任务及项目数量、`expectedSavedAt` 与 `backupHash`。
 - `backup.restore` 接受 `{ backup, expectedSavedAt, backupHash }`。文件内容或看板版本变化时返回 409，恢复前先保留当前看板快照。恢复后的任务和项目使用新的版本；备份中仍匹配目标版本的合并记录可以继续撤销。浏览器支持最高 15 MiB 的备份文件，使用独立的 `POST /backup` 入口。

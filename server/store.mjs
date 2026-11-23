@@ -134,7 +134,7 @@ export const DEFAULT_SETTINGS = {
    * analysis. Slated for removal in v0.6.
    */
   model: "deepseek-flash",
-  initialDays: 30,
+  initialDays: 7,
   maxTasksPerSession: 3,
   excludeWorkspaces: [],
   lastScanAt: null,
@@ -221,6 +221,8 @@ export function emptyScanState() {
     aiDue: 0,
     aiBudget: 0,
     aiBudgetUsed: 0,
+    aiDailyUsed: 0,
+    aiDailyLimit: 0,
     aiAttempts: 0,
     aiPending: 0,
     aiDeferredReason: null, // null | "budget" | "time" | "daily"

@@ -16,6 +16,12 @@ export const EVIDENCE_KINDS = ["user", "assistant", "todo", "tool", "artifact", 
 
 const DAY = 86_400_000;
 
+/**
+ * Inactivity window (in days) after which an ended session is treated as
+ * historical backfill rather than active work awaiting immediate review.
+ */
+export const STALE_SESSION_DAYS = 7;
+
 /** Chinese negative/blocking phrases used to surface issues from human feedback. */
 const NEGATIVE_PATTERNS = [
   /还是不行/,
@@ -167,6 +173,8 @@ function inferStatus(parsed) {
   let reason;
   let attention = null;
   let completionBasis = null;
+  let staleCompleted = false;
+  const stale = daysIdle > STALE_SESSION_DAYS;
   const latestReply = parsed.assistants.at(-1)?.text || "";
   const requestsDecision = /(?:请(?:先)?(?:确认|选择|提供|告知|决定)|等待(?:你|用户)(?:确认|选择|回复)|(?:please|could you) (?:confirm|choose|provide|clarify))/i.test(latestReply.slice(-600));
   if (parsed.isLive) {
@@ -179,16 +187,16 @@ function inferStatus(parsed) {
     status = "blocked";
     reason = t("最后一轮以错误结束");
   } else if (lastTurnEnd.kind === "aborted" || lastTurnEnd.kind === "interrupted") {
-    status = daysIdle > 7 ? "backlog" : "in_progress";
-    reason = daysIdle > 7 ? t("最后一轮被中止且已多日无活动") : t("最后一轮被中止");
-    attention = "interrupted";
+    status = stale ? "backlog" : "in_progress";
+    reason = stale ? t("最后一轮被中止且已多日无活动") : t("最后一轮被中止");
+    attention = stale ? null : "interrupted";
   } else if (requestsDecision) {
-    status = "in_progress";
-    attention = "waiting_user";
-    reason = t("最近回复请求用户确认或提供信息");
+    status = stale ? "backlog" : "in_progress";
+    attention = stale ? null : "waiting_user";
+    reason = stale ? t("曾请求用户确认但已多日无活动") : t("最近回复请求用户确认或提供信息");
   } else if (todoFresh && pendingTodos > 0) {
-    status = "in_progress";
-    reason = t("最新待办仍有 {0} 项未完成", [pendingTodos]);
+    status = stale ? "backlog" : "in_progress";
+    reason = stale ? t("最新待办仍有 {0} 项未完成且已多日无活动", [pendingTodos]) : t("最新待办仍有 {0} 项未完成", [pendingTodos]);
   } else if (lastTurnEnd.kind === "completed" && parsed.goal?.status === "done") {
     status = "done";
     completionBasis = "session_goal";
@@ -197,6 +205,11 @@ function inferStatus(parsed) {
     status = "done";
     completionBasis = "session_todos";
     reason = t("最新待办全部完成且本轮正常结束");
+  } else if (stale) {
+    status = "backlog";
+    attention = null;
+    staleCompleted = true;
+    reason = t("本轮已结束且已多日无活动");
   } else {
     status = "in_progress";
     attention = "review";
@@ -207,6 +220,7 @@ function inferStatus(parsed) {
     reason,
     attention,
     completionBasis,
+    staleCompleted,
     todoCounts,
     todoFresh,
     lastTurnStartSeq,
@@ -237,7 +251,7 @@ function inferPriority(parsed, status) {
  */
 function negativeFeedbackIssues(parsed, decision, limit = 3) {
   const issues = [];
-  if (decision.status === "done") return issues;
+  if (decision.status === "done" || decision.staleCompleted) return issues;
   const firstSeq = parsed.users[0]?.seq;
   const recentUsers = parsed.users.slice(-8).filter((message) => message.seq !== firstSeq);
   const lastSeq = recentUsers[recentUsers.length - 1]?.seq ?? 0;
@@ -456,6 +470,8 @@ export function analyzeSessionRules(parsed, { workspaceTitle = null, workspacePa
       reason,
       attention: decision.attention,
       completionBasis: decision.completionBasis,
+      staleCompleted: decision.staleCompleted,
+      daysIdle: decision.daysIdle,
       mergeWith: null,
     },
   ].slice(0, Math.max(1, maxTasks));

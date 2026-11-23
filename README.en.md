@@ -25,7 +25,7 @@ Enable the plugin and reload DSH. [Verify your version, upgrade, roll back, or u
 ### First run
 
 1. Open **任务看板** (Task board) from the left sidebar. Inside a conversation, use the board icon at the top to dock the board on the right, or select the floating entry to expand the floating board.
-2. Confirm the activity window in settings and select **扫描** (Scan). By default, incremental scans cover sessions active in the last 30 days. Check the scan button tooltip or Maintenance for results.
+2. Confirm the activity window in settings and select **扫描** (Scan). By default, incremental scans cover sessions active in the last 7 days (adjustable from 3 to 365 days, or reset & rescan / scan full history from Maintenance). Check the scan button tooltip or Maintenance for results.
 3. Open **待处理** (Inbox) to find sessions that need you, or open a task to see its acceptance criteria and main deliverable.
 4. Review the deliverables and select **确认验收** (Confirm acceptance). To do more work, choose **继续此任务** (Continue task), review the draft, place it in a linked or new session, and send it yourself.
 

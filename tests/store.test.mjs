@@ -116,6 +116,8 @@ test("emptyScanState exposes the additive AI budget observability fields", () =>
   const scan = emptyScanState();
   assert.equal(scan.aiDue, 0);
   assert.equal(scan.aiBudget, 0);
+  assert.equal(scan.aiDailyUsed, 0);
+  assert.equal(scan.aiDailyLimit, 0);
   assert.equal(scan.aiAttempts, 0);
   assert.equal(scan.aiPending, 0);
   assert.equal(scan.aiDeferredReason, null);
@@ -147,6 +149,7 @@ test("normalizeSettingsPatch ignores unknown keys and does not mutate input", ()
 test("DEFAULT_SETTINGS matches the documented contract defaults", () => {
   assert.equal(DEFAULT_SETTINGS.autoScan, true);
   assert.equal(DEFAULT_SETTINGS.aiEnabled, true);
+  assert.equal(DEFAULT_SETTINGS.initialDays, 7);
   // v3 model route: deprecated `model` survives for read compatibility only.
   assert.equal(DEFAULT_SETTINGS.model, "deepseek-flash");
   assert.equal(DEFAULT_SETTINGS.aiProvider, "");

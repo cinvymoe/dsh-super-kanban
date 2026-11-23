@@ -536,7 +536,7 @@ window.__ModuleLoader__.load({
   "显示更多记录": "Show more activity",
   "待审批任务": "Tasks awaiting approval",
   "打开会话：{0}": "Open session: {0}",
-  "确认完成": "Confirm completion",
+  "确认完成": "Confirm done",
   "确认完成：{0}": "Confirm completion: {0}",
   "还有 {0} 项": "More: {0} items",
   "任务已更新，请查看最新状态后再确认。": "The task changed. Review its latest state before confirming.",
@@ -1097,7 +1097,27 @@ window.__ModuleLoader__.load({
   "在列表中整理": "Organize in list",
   "跳过 {0} 个闲聊会话": "Skipped {0} small-talk sessions",
   "无效任务状态": "Invalid task status",
-  "来源为插件自动维护会话，已归档": "Source is a plugin's automatic maintenance session; archived"
+  "来源为插件自动维护会话，已归档": "Source is a plugin's automatic maintenance session; archived",
+  "曾请求用户确认但已多日无活动": "Asked for confirmation, then went inactive for days",
+  "最新待办仍有 {0} 项未完成且已多日无活动": "{0} latest to-dos remain unfinished after days of inactivity",
+  "本轮已结束且已多日无活动": "Turn ended and session has been inactive for days",
+  "历史会话已完成": "Completed in historical session",
+  "历史会话已多日无活动，按先前的完成研判归入已完成": "Historical session inactive for days; settled as done from prior AI verdict",
+  "历史会话已多日无活动，移出待处理": "Historical session inactive for days; cleared from Needs attention",
+  "历史会话已多日无活动，清除待处理提示": "Historical session inactive for days; cleared attention notice",
+  "批量确认完成不能与批量状态同时使用": "Bulk confirm completion cannot be combined with bulk status",
+  "请等待扫描或研判结束后再重置": "Wait for the current scan or analysis to finish before resetting",
+  "活跃周期必须为 1–365 天": "Activity window must be between 1 and 365 days",
+  "仅显示待确认（{0}）": "Only awaiting review ({0})",
+  "当前范围没有待确认任务": "No tasks awaiting confirmation in this view",
+  "{0} 项待确认进度或待验收": "{0} tasks awaiting confirmation or review",
+  "批量整理": "Organize in bulk",
+  "AI 研判 {0}/{1}（今日预算 {2}/{3}）": "AI analysis {0}/{1} (daily budget {2}/{3})",
+  "重置并重扫范围": "Reset & rescan window",
+  "重置自动任务并重扫": "Reset auto tasks & rescan",
+  "将清除 {0} 项自动任务并按最近 {1} 天重扫（保留手动任务与项目，自动保存恢复点）": "Clear {0} automatic tasks and rescan the last {1} days (manual tasks and projects are kept, and a restore point is saved)",
+  "已重置自动任务并开始按最近 {0} 天重扫": "Reset automatic tasks and started rescanning the last {0} days",
+  "确认重置并重扫": "Confirm reset & rescan"
 });
     const createTranslator = function createTranslator(catalog, language = "en") {
   return function translate(source, values = []) {
@@ -1205,7 +1225,8 @@ window.__ModuleLoader__.load({
     const RELATION_LABELS = { get parent() { return t("父任务"); }, get depends_on() { return t("依赖任务"); }, get related() { return t("相关任务"); } };
     const ATTENTION_LABELS = { get waiting_user() { return t("待你确认"); }, get review() { return t("待确认进度"); }, get acceptance() { return t("待验收"); }, get interrupted() { return t("执行中断"); } };
     const INTERACTION_LABELS = { get approval() { return t("待审批"); }, get question() { return t("待回答"); }, get "plan-review"() { return t("待审阅方案"); } };
-    const COMPLETION_LABELS = { get user() { return t("人工确认"); }, get session_goal() { return t("DSH 目标完成"); }, get session_todos() { return t("本轮待办已完成"); } };
+    const DEFAULT_INITIAL_DAYS = 7;
+    const COMPLETION_LABELS = { get user() { return t("人工确认"); }, get session_goal() { return t("DSH 目标完成"); }, get session_todos() { return t("本轮待办已完成"); }, get history_completed() { return t("历史会话已完成"); } };
     let pendingHandoff = null;
 
     function localDateKey(now) {
@@ -1361,7 +1382,7 @@ window.__ModuleLoader__.load({
     }
 
     function activityCutoff(days, now = Date.now()) {
-      return now - (Number(days) || 30) * 86_400_000;
+      return now - (Number(days) || DEFAULT_INITIAL_DAYS) * 86_400_000;
     }
 
     function isHistoricalTask(task, cutoff) {
@@ -5389,7 +5410,7 @@ button.sk-task-row-main{cursor:pointer}
           aiEnabled: settings.aiEnabled !== false,
           autoScan: settings.autoScan !== false,
           scanIntervalSeconds: settings.scanIntervalSeconds || 120,
-          initialDays: settings.initialDays || 30,
+          initialDays: settings.initialDays || DEFAULT_INITIAL_DAYS,
           // 新字段一律用 ?? 初始化（禁止 || 回退，否则 0 / "auto" 会被误判）。
           aiBudgetMode: settings.aiBudgetMode ?? AI_BUDGET_MODE_DEFAULT,
           maxAiCallsPerScan: settings.maxAiCallsPerScan ?? AI_MAX_CALLS_DEFAULT,
@@ -5527,7 +5548,7 @@ button.sk-task-row-main{cursor:pointer}
               h(
                 "select",
                 { className: "sk-select", "aria-label": t("活跃周期"), value: draft.initialDays, onChange: (event) => set({ initialDays: Number(event.target.value) }) },
-                [...new Set([7, 14, 30, 90, 180, 365, draft.initialDays])].sort((a, b) => a - b)
+                [...new Set([3, 7, 14, 30, 90, 180, 365, draft.initialDays])].sort((a, b) => a - b)
                   .map((days) => h("option", { key: days, value: days }, t("最近 {0} 天", [days]))),
               ),
             ),
@@ -5854,29 +5875,38 @@ button.sk-task-row-main{cursor:pointer}
       return groups;
     }
 
-    function TaskCollection({ mode, tasks, projects = [], signals, onOpen, taskActions, openSession, reload, pushToast, emptyText, onClear, clearLabel }) {
+    function TaskCollection({ mode, tasks, projects = [], signals, onOpen, taskActions, openSession, reload, pushToast, emptyText, onClear, clearLabel, initialPreset = "", onOrganizeReview }) {
       const [checked, setChecked] = React.useState([]);
       const [busy, setBusy] = React.useState(false);
       const [status, setStatus] = React.useState("");
       const [priority, setPriority] = React.useState("");
       const [project, setProject] = React.useState("");
-      const [casualOnly, setCasualOnly] = React.useState(false);
+      const [preset, setPreset] = React.useState(() => (mode === "list" ? initialPreset : ""));
+      const isReviewCard = (task) => !task.archived && task.status !== "done" && ["review", "acceptance"].includes(task.attention);
       const sorted = React.useMemo(() => {
         if (mode === "schedule") return tasks;
-        if (mode === "list" && casualOnly) return tasks.filter((task) => task.casualConversation).sort(compareTasks);
+        if (mode === "list" && preset === "casual") return tasks.filter((task) => task.casualConversation).sort(compareTasks);
+        if (mode === "list" && preset === "review") return tasks.filter(isReviewCard).sort(compareTasks);
         if (mode !== "attention") return tasks.slice().sort(compareTasks);
         return tasks.filter((task) => signals.has(task.id))
           .sort((a, b) => signals.get(a.id).rank - signals.get(b.id).rank || compareTasks(a, b));
-      }, [tasks, mode, signals, casualOnly]);
+      }, [tasks, mode, signals, preset]);
       const casualCount = mode === "list" ? tasks.filter((task) => task.casualConversation).length : 0;
-      const casualFilter = casualCount || casualOnly ? h("label", { className: "sk-inline-actions" },
-        h("input", { type: "checkbox", checked: casualOnly, disabled: busy, onChange: (event) => {
-          setCasualOnly(event.target.checked);
-          setChecked([]);
-        } }), t("仅显示闲聊任务（{0}）", [casualCount])) : null;
+      const reviewCount = mode === "list" || mode === "attention" ? tasks.filter(isReviewCard).length : 0;
+      const togglePreset = (name, enabled) => {
+        setPreset(enabled ? name : "");
+        setChecked([]);
+      };
+      const casualFilter = casualCount || preset === "casual" ? h("label", { className: "sk-inline-actions" },
+        h("input", { type: "checkbox", checked: preset === "casual", disabled: busy,
+          onChange: (event) => togglePreset("casual", event.target.checked) }), t("仅显示闲聊任务（{0}）", [casualCount])) : null;
+      const reviewFilter = reviewCount || preset === "review" ? h("label", { className: "sk-inline-actions" },
+        h("input", { type: "checkbox", checked: preset === "review", disabled: busy,
+          onChange: (event) => togglePreset("review", event.target.checked) }), t("仅显示待确认（{0}）", [reviewCount])) : null;
       const checkedIds = new Set(checked);
       const selected = sorted.filter((task) => checkedIds.has(task.id));
       const active = selected.map((task) => task.id);
+      const canBatchAccept = selected.length > 0 && selected.every((task) => !task.archived) && selected.some((task) => task.status !== "done");
       const batch = async (patch) => {
         setBusy(true);
         try {
@@ -5934,10 +5964,12 @@ button.sk-task-row-main{cursor:pointer}
       }
 
       if (!sorted.length) return h("div", { className: "sk-empty-v3" },
+        reviewFilter,
         casualFilter,
-        casualOnly ? t("当前范围没有闲聊任务") :
+        preset === "casual" ? t("当前范围没有闲聊任务") :
+        preset === "review" ? t("当前范围没有待确认任务") :
         mode === "attention" && tasks.length ? t("当前没有待处理事项") : emptyText,
-        !casualOnly && (mode !== "attention" || !tasks.length) ? h("button", { className: "sk-text", type: "button", onClick: onClear }, clearLabel) : null);
+        !preset && (mode !== "attention" || !tasks.length) ? h("button", { className: "sk-text", type: "button", onClick: onClear }, clearLabel) : null);
       if (mode === "hierarchy") {
         return h("div", { className: "sk-collection" }, [...taskHierarchy(sorted)].map(([workspaceId, { title, rows }]) =>
           h("details", { key: workspaceId, className: "sk-workspace-group", open: true },
@@ -5945,13 +5977,18 @@ button.sk-task-row-main{cursor:pointer}
             h("ul", { className: "sk-task-list" }, rows.map(({ task, depth }) => row(task, depth))))));
       }
       return h("div", { className: "sk-collection" },
+        mode === "attention" && reviewCount >= 2 && onOrganizeReview ? h("div", { className: "sk-batchbar" },
+          h("span", null, t("{0} 项待确认进度或待验收", [reviewCount])),
+          h("button", { className: "sk-btn", type: "button", onClick: onOrganizeReview }, t("批量整理"))) : null,
         mode === "list" ? h("div", { className: "sk-batchbar" },
+          reviewFilter,
           casualFilter,
           h("button", { className: "sk-btn", type: "button", disabled: busy || active.length >= Math.min(sorted.length, 200),
             onClick: () => setChecked(sorted.slice(0, 200).map((task) => task.id)) },
             sorted.length > 200 ? t("选择前 200 项") : t("全选")),
           active.length ? h(React.Fragment, null,
             h("button", { className: "sk-text", type: "button", disabled: busy, onClick: () => setChecked([]) }, t("取消选择 {0} 项", [active.length])),
+            canBatchAccept ? h("button", { className: "sk-btn", type: "button", disabled: busy, onClick: () => batch({ accept: true }) }, t("确认完成")) : null,
             h("select", { className: "sk-select", "aria-label": t("批量状态"), value: status, disabled: busy, onChange: (event) => setStatus(event.target.value) },
               h("option", { value: "" }, t("状态")), STATUS_ORDER.map((value) => h("option", { key: value, value }, STATUS_META[value].label))),
             h("button", { className: "sk-btn", type: "button", disabled: busy || !status, onClick: () => batch({ status }) }, t("应用状态")),
@@ -7291,12 +7328,21 @@ button.sk-task-row-main{cursor:pointer}
           : h("div", { className: "sk-empty-v3" }, fileType ? t("当前范围没有此类型的产出") : t("当前范围没有产出")));
     }
 
-    function scanProgressInfo(scan) {
+    function scanProgressInfo(scan, usage, settings) {
       if (scan.phase === "discover") return { label: t("正在发现会话…") };
       if (scan.phase === "ai") {
         const value = scan.aiBudgetUsed || 0;
         const total = scan.aiBudget || 0;
-        return { value, total, label: t("AI 研判 {0}/{1}", [value, total]) };
+        const dailyLimit = Number(scan.aiDailyLimit) || Number(settings?.dailyAiCallLimit) || 0;
+        const dailyUsed = Number(scan.aiDailyLimit) > 0 && Number.isFinite(Number(scan.aiDailyUsed))
+          ? Number(scan.aiDailyUsed)
+          : Number.isFinite(Number(usage?.budgetUsed))
+            ? Number(usage.budgetUsed)
+            : null;
+        const label = dailyLimit > 0 && dailyUsed !== null
+          ? t("AI 研判 {0}/{1}（今日预算 {2}/{3}）", [value, total, dailyUsed, dailyLimit])
+          : t("AI 研判 {0}/{1}", [value, total]);
+        return { value, total, label };
       }
       if (scan.phase === "apply") {
         const value = scan.applyProcessed || 0;
@@ -7313,6 +7359,10 @@ button.sk-task-row-main{cursor:pointer}
       const [busy, setBusy] = React.useState(false);
       const [backup, setBackup] = React.useState(null);
       const [preview, setPreview] = React.useState(null);
+      const [resetDays, setResetDays] = React.useState(() => Number(data.settings?.initialDays) || DEFAULT_INITIAL_DAYS);
+      const [confirmResetDays, setConfirmResetDays] = React.useState(0);
+      const autoTaskCount = (data.tasks || []).filter((task) => task.origin !== "manual").length;
+      const resetOptions = [...new Set([3, 7, 14, 30, resetDays])].sort((a, b) => a - b);
       const run = async (action, message) => {
         setBusy(true);
         try {
@@ -7346,9 +7396,27 @@ button.sk-task-row-main{cursor:pointer}
           h("p", null, data.storage?.writable === false ? t("存储暂不可写") : t("存储可用"),
             data.storage?.savedAt ? t(" · 最近保存 {0}", [relTimeValue(data.storage.savedAt)]) : ""),
           h("div", { className: "sk-batchbar" },
-            h("button", { className: "sk-btn", type: "button", onClick: () => startScan("full"), disabled: data.scan?.state === "running" }, t("扫描全部历史")),
+            h("button", { className: "sk-btn", type: "button", onClick: () => startScan("full"), disabled: data.scan?.state === "running" || busy }, t("扫描全部历史")),
             data.storage?.writable === false ? h("button", { className: "sk-btn", type: "button", disabled: busy, onClick: () => run(() => command("storage.retry"), t("看板已保存")) }, t("重试保存")) : null,
             h("button", { className: "sk-btn", type: "button", disabled: busy, onClick: () => run(downloadExport, t("已导出看板备份")) }, t("导出备份"))),
+          h("div", { className: "sk-batchbar" },
+            h("label", { className: "sk-inline-actions" }, t("重置并重扫范围"),
+              h("select", { className: "sk-select", "aria-label": t("重置并重扫范围"), value: resetDays, disabled: busy || data.scan?.state === "running",
+                onChange: (event) => {
+                  const next = Number(event.target.value);
+                  setResetDays(next);
+                  if (confirmResetDays) setConfirmResetDays(next);
+                } },
+                resetOptions.map((days) => h("option", { key: days, value: days }, t("最近 {0} 天", [days]))))),
+            h("button", { className: "sk-btn", type: "button", disabled: busy || data.scan?.state === "running",
+              onClick: () => setConfirmResetDays(resetDays) }, t("重置自动任务并重扫"))),
+          confirmResetDays > 0 ? h("div", { className: "sk-board-notice" },
+            h("span", null, t("将清除 {0} 项自动任务并按最近 {1} 天重扫（保留手动任务与项目，自动保存恢复点）", [autoTaskCount, confirmResetDays])),
+            h("button", { className: "sk-btn", type: "button", disabled: busy || data.scan?.state === "running", onClick: () => run(async () => {
+              await command("board.reset", { days: confirmResetDays, keepManual: true, rescan: true });
+              setConfirmResetDays(0);
+            }, t("已重置自动任务并开始按最近 {0} 天重扫", [confirmResetDays])) }, t("确认重置并重扫")),
+            h("button", { className: "sk-btn", type: "button", disabled: busy, onClick: () => setConfirmResetDays(0) }, t("取消"))) : null,
           h("label", { className: "sk-field" }, t("选择备份以预览"),
             h("input", { type: "file", accept: ".json,application/json", disabled: busy,
               onChange: (event) => { const file = event.target.files?.[0]; event.target.value = ""; previewBackup(file); } })),
@@ -7437,6 +7505,7 @@ button.sk-task-row-main{cursor:pointer}
       const { data, error, loading, reload, setData } = useBoardData();
       const sessionId = surface === "side" ? ctxProps.sessionId : null;
       const [currentOnly, setCurrentOnly] = React.useState(true);
+      const [listPreset, setListPreset] = React.useState("");
       const [mode, setMode] = React.useState(() => {
         try {
           const saved = localStorage.getItem(`dsh-super-kanban:view:${surface}`);
@@ -7444,6 +7513,9 @@ button.sk-task-row-main{cursor:pointer}
         } catch { /* optional preference */ }
         return surface === "side" ? "list" : "board";
       });
+      React.useEffect(() => {
+        if (mode !== "list" && listPreset) setListPreset("");
+      }, [mode, listPreset]);
       const [filters, setFilters] = React.useState(() => readFilters(surface));
       const selectedProject = data?.projects?.find((project) => project.id === filters.project);
       const collapseKey = `dsh-super-kanban:done-collapsed:${surface}`;
@@ -7749,7 +7821,7 @@ button.sk-task-row-main{cursor:pointer}
 
       const scanRunning = scan.state === "running";
       // 运行中 AI 进度：Host 已把 aiBudgetMode 解析成 scan.aiBudget；旧 Host 无该字段时只显示已用次数。
-      const scanProgress = scanRunning ? scanProgressInfo(scan) : null;
+      const scanProgress = scanRunning ? scanProgressInfo(scan, data?.usage, settings) : null;
       const scanHeading = scan.first ? t("首次扫描") : scan.mode === "full" ? t("扫描全部历史") : t("扫描会话");
       // 完成播报补「剩余 N 个下次继续」：scan.aiPending 含失败待重试（Host 可选字段）。
       const scanPending = Number(scan.aiPending) > 0 ? Math.round(Number(scan.aiPending)) : 0;
@@ -8081,7 +8153,7 @@ button.sk-task-row-main{cursor:pointer}
             h(Icon, { name: "chevronDown", size: 12, className: "sk-ws-caret" }),
           ),
           !["projects", "maintenance"].includes(mode) ? h("select", { className: "sk-select sk-activity-picker", "aria-label": t("任务时间范围"),
-            value: filters.activity, title: t("近期：最近 {0} 天", [settings.initialDays || 30]),
+            value: filters.activity, title: t("近期：最近 {0} 天", [settings.initialDays || DEFAULT_INITIAL_DAYS]),
             onChange: (event) => setFilters((value) => ({ ...value, activity: event.target.value })) },
             Object.entries(ACTIVITY_RANGES).map(([id, label]) => h("option", { key: id, value: id }, label))) : null,
           sessionId ? h("button", { type: "button", className: "sk-slim-icon sk-session-scope", "aria-pressed": currentOnly,
@@ -8204,7 +8276,9 @@ button.sk-task-row-main{cursor:pointer}
           : mode === "artifacts"
             ? h(ArtifactsView, { tasks: visible, host, desktopFiles, pushToast, onOpen: setDrawerId })
             : mode !== "board"
-              ? h(TaskCollection, { key: mode, mode, tasks: visible, projects, signals, onOpen: setDrawerId, taskActions, openSession: openAttentionSession, reload, pushToast,
+              ? h(TaskCollection, { key: mode === "list" ? `${mode}:${listPreset}` : mode, mode, tasks: visible, projects, signals, onOpen: setDrawerId, taskActions, openSession: openAttentionSession, reload, pushToast,
+                  initialPreset: mode === "list" ? listPreset : "",
+                  onOrganizeReview: () => { setListPreset("review"); setMode("list"); },
                   emptyText: sessionId && currentOnly ? t("当前会话还没有关联任务") : t("没有匹配的任务"),
                   onClear: sessionId && currentOnly ? () => setCurrentOnly(false) : clearFilters,
                   clearLabel: sessionId && currentOnly ? t("查看全部会话") : t("清空筛选") })

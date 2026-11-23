@@ -51,7 +51,7 @@ function loadClient(services, { snapshot, view = "attention", filters, prefs, cl
   const script = inspect ? source.replace("return { apply, inject:",
     "return { apply, useBoardData, command, draftChanges, chatContext, floatingSummary, floatingReview, canAcceptTask, canAcceptReview, subscribeBoardRefresh, normalizePrefs, quickCapturePayload, " +
     "folderGlyph, folderColor, t, STATUS_META, FLOAT_TABS, displayLocale, " +
-    "markdownBlocks, renderInline, taskChatReference, ArtifactsView, TaskCollection, TaskLinks, inject:") : source;
+    "markdownBlocks, renderInline, taskChatReference, ArtifactsView, TaskCollection, TaskLinks, MaintenanceView, SettingsModal, scanProgressInfo, inject:") : source;
   vm.runInNewContext(script, context, { filename: "client.js" });
   plugin.apply({
     get: (name) => name === "locale" ? services.locale || { getSnapshot: () => ({ active: "zh" }) } : services[name],
@@ -1225,4 +1225,112 @@ test("changing locale refreshes projected board data and discards the preceding 
   requests[1].resolve(result("旧任务"));
   assert.equal(await stale, null);
   assert.deepEqual(changes.filter((item) => item?.tasks).map((item) => item.tasks[0].title), ["旧任务", "Existing task"]);
+});
+
+test("scan progress shows daily AI budget usage during the AI stage and falls back cleanly for older hosts", () => {
+  const { plugin } = loadClient({}, { inspect: true });
+  const live = plugin.scanProgressInfo(
+    { phase: "ai", aiBudget: 12, aiBudgetUsed: 3, aiDailyUsed: 15, aiDailyLimit: 150 },
+    { budgetUsed: 10 },
+    { dailyAiCallLimit: 150 },
+  );
+  assert.equal(live.value, 3);
+  assert.equal(live.total, 12);
+  assert.equal(live.label, "AI 研判 3/12（今日预算 15/150）");
+
+  const fallback = plugin.scanProgressInfo(
+    { phase: "ai", aiBudget: 8, aiBudgetUsed: 2 },
+    { budgetUsed: 6 },
+    { dailyAiCallLimit: 100 },
+  );
+  assert.equal(fallback.label, "AI 研判 2/8（今日预算 6/100）");
+
+  const bare = plugin.scanProgressInfo({ phase: "ai", aiBudget: 8, aiBudgetUsed: 2 }, null, {});
+  assert.equal(bare.label, "AI 研判 2/8");
+});
+
+test("attention offers bulk review organization and list supports review filter and bulk confirm done", async () => {
+  const requests = [];
+  const { plugin, seedNextState } = loadClient({}, {
+    inspect: true,
+    fetch: async (url, options) => {
+      requests.push([url.pathname, JSON.parse(options.body)]);
+      return { ok: true, json: async () => ({ ok: true, data: { count: 2 } }) };
+    },
+  });
+  const tasks = [
+    { id: "r1", title: "Review 1", status: "in_progress", attention: "review", archived: false },
+    { id: "r2", title: "Review 2", status: "in_progress", attention: "acceptance", archived: false },
+    { id: "d1", title: "Done 1", status: "done", attention: null, archived: false },
+  ];
+  const signals = new Map([
+    ["r1", { label: "待确认进度", rank: 2 }],
+    ["r2", { label: "待验收", rank: 2 }],
+  ]);
+  let organized = false;
+  const attentionView = plugin.TaskCollection({
+    mode: "attention", tasks, signals,
+    taskActions: { handlers: () => ({}), button: () => null },
+    onOrganizeReview: () => { organized = true; },
+  });
+  const organizeBtn = [...elements(attentionView)].find((node) => node.type === "button" && renderedText(node) === "批量整理");
+  assert.ok(organizeBtn, "attention view exposes bulk organize route when >=2 review cards exist");
+  organizeBtn.props.onClick();
+  assert.equal(organized, true);
+
+  seedNextState(["r1", "r2"], []);
+  const listView = plugin.TaskCollection({
+    mode: "list", tasks, signals, initialPreset: "review",
+    taskActions: { handlers: () => ({}), button: () => null },
+    reload: async () => {},
+    pushToast: () => {},
+  });
+  const listText = renderedText(listView);
+  assert.match(listText, /仅显示待确认（2）/);
+  assert.match(listText, /Review 1/);
+  assert.doesNotMatch(listText, /Done 1/);
+  const confirmBtn = [...elements(listView)].find((node) => node.type === "button" && renderedText(node) === "确认完成");
+  assert.ok(confirmBtn);
+  await confirmBtn.props.onClick();
+  assert.deepEqual(requests[0], ["/super-kanban/api/command", { op: "task.batch", payload: { ids: ["r1", "r2"], accept: true } }]);
+});
+
+test("maintenance view confirms and dispatches board.reset with the chosen window, and settings offers 3 days", async () => {
+  const requests = [];
+  const { plugin, seedNextState } = loadClient({}, {
+    inspect: true,
+    fetch: async (url, options) => {
+      requests.push([url.pathname, JSON.parse(options.body)]);
+      return { ok: true, json: async () => ({ ok: true, data: { removed: 2, kept: 1, initialDays: 7, rescanStarted: true } }) };
+    },
+  });
+  const data = {
+    tasks: [
+      { id: "a1", origin: "auto" },
+      { id: "a2", origin: "auto+edited" },
+      { id: "m1", origin: "manual" },
+    ],
+    settings: { initialDays: 7 },
+    scan: { state: "idle", message: "空闲" },
+    storage: { writable: true },
+    maintenance: {},
+  };
+  seedNextState(7, 0);
+  const view = plugin.MaintenanceView({ data, reload: async () => {}, pushToast: () => {}, startScan: () => {} });
+  const text = renderedText(view);
+  assert.match(text, /重置自动任务并重扫/);
+  assert.match(text, /将清除 2 项自动任务并按最近 7 天重扫/);
+  const confirmBtn = [...elements(view)].find((node) => node.type === "button" && renderedText(node) === "确认重置并重扫");
+  assert.ok(confirmBtn);
+  await confirmBtn.props.onClick();
+  assert.deepEqual(requests[0], ["/super-kanban/api/command", { op: "board.reset", payload: { days: 7, keepManual: true, rescan: true } }]);
+
+  const settingsView = plugin.SettingsModal({
+    settings: {}, route: null, modelOpen: false, workspaces: [],
+    prefs: { surface: "page", floatEnabled: false, floatStyle: "badge", floatPosition: "right", floatSummaries: ["acceptance"], floatHideEmpty: false, floatSize: "normal", floatPinned: false },
+    usage: null, onPrefsChange: () => {}, onClose: () => {}, onSave: async () => {}, onScan: () => {}, pushToast: () => {},
+  });
+  const windowSelect = [...elements(settingsView)].find((node) => node.type === "select" && node.props["aria-label"] === "活跃周期");
+  assert.equal(windowSelect.props.value, 7);
+  assert.ok(windowSelect.children.flat().some((option) => option?.props?.value === 3), "activity window includes 3 days");
 });
