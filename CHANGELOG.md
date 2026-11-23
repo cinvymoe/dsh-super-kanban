@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-23
+
+### 修复与改进
+
+- 多会话任务的陈旧待处理自动收敛现会检查全部关联会话（含辅助会话）的实时活跃态并取最新活跃时间，辅助会话仍在运行时不会误将旧卡移出待处理。
+- 维护页「重置自动任务并重扫」的默认天数在设置变更后自动跟随最新的活跃周期（二次确认期间保持已选天数不变）。
+- 同步更新日常使用文档与接口契约（默认 7 天活跃周期、`completionBasis: "history_completed"` 与批量确认/重置重扫说明）。
+- Hardened stale-review cleanup for multi-session cards so active supporting sessions are respected, synced the Maintenance reset window with updated settings, and aligned workflow/contract documentation.
+
 ## [0.10.6] - 2026-11-23
 
 ### 修复
@@ -537,7 +546,8 @@ workspace into a maintainable task board.
   v0.5.0 model requests go through the DSH native model service — see the
   current SECURITY.md.)*
 
-[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.3...v0.10.4
