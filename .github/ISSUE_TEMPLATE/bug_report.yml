@@ -33,7 +33,7 @@ body:
     id: plugin-version
     attributes:
       label: Super Kanban version
-      placeholder: e.g. 0.5.0 (see package.json or the plugin market entry)
+      placeholder: e.g. 0.10.8 (see package.json or the plugin market entry)
     validations:
       required: true
 
@@ -41,7 +41,7 @@ body:
     id: dsh-version
     attributes:
       label: DeepSeek Harness version
-      placeholder: e.g. 0.2.1-rc.5
+      placeholder: e.g. 0.2.3-alpha.2
     validations:
       required: true
 

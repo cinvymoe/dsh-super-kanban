@@ -42,7 +42,7 @@ node -p "require(require('os').homedir() + '/.dsh/profiles/desktop/node_modules/
 ```
 
 - 跨 minor 升级时，按 [安装指南第 3.2 节](INSTALL.md#32-推荐升级步骤所有安装方式通用) 卸载后安装目标精确版本。
-- 如果依赖是 `link:/path/...`：这是源码安装，升级方式是更新该目录的代码（`git pull` / `git checkout v0.10.7` 固定到目标版本），刷新窗口即可；各安装方式的「安装特定版本」示例见 [INSTALL.md 第 1 节](INSTALL.md#1-安装四种方式)。
+- 如果依赖是 `link:/path/...`：这是源码安装，升级方式是更新该目录的代码（`git pull` / `git checkout v0.10.8` 固定到目标版本），刷新窗口即可；各安装方式的「安装特定版本」示例见 [INSTALL.md 第 1 节](INSTALL.md#1-安装四种方式)。
 
 ### 原因二：客户端 bundle 缓存 / 旧进程
 
@@ -57,7 +57,7 @@ DSH 桌面版使用 `desktop` profile；如果你在隔离 home（`DSH_HOME=/pat
 ### 仍不生效
 
 按 [INSTALL.md 第 3.5 节](INSTALL.md#35-更新后界面仍旧4-步快速排查) 走完整 4 步；再不行则卸载插件、重启 DSH、重新安装目标精确版本
-（如 `dsh-super-kanban@0.10.7`；市场版本列表、npm 精确版本、Git tag 等写法见 [INSTALL.md 第 1 节](INSTALL.md#1-安装四种方式)），
+（如 `dsh-super-kanban@0.10.8`；市场版本列表、npm 精确版本、Git tag 等写法见 [INSTALL.md 第 1 节](INSTALL.md#1-安装四种方式)），
 并带上 [诊断信息](#如何收集诊断信息) 反馈。回滚步骤见 [INSTALL.md 第 4 节](INSTALL.md#4-回滚到旧版本)。
 
 ---
@@ -95,7 +95,8 @@ DSH 桌面版使用 `desktop` profile；如果你在隔离 home（`DSH_HOME=/pat
 
 看板 API 只允许**当前 DSH 的 owner** 在同一会话/同源环境访问，这是有意的安全设计。
 
-- **401**：没有有效登录态。请通过 DSH 窗口正常打开看板，不要用终端里的无 cookie 请求直接访问 `http://127.0.0.1:<port>/super-kanban/api/...`。
+- **升级到 DSH `0.2.3+` 后看板显示 `看板加载失败 · unauthorized`**：DSH 自 `0.2.3-alpha` 起调整了桌面端 `WebServer` 准入参数传递，旧版插件（`<= 0.10.7`）在已通过宿主认证的请求上二次调用旧接口导致 `401`。请将 `dsh-super-kanban` 升级到 **`>= 0.10.8`**（卸载旧版后安装 `dsh-super-kanban@0.10.8`）并刷新或重启 DSH 即可恢复。
+- **401**：没有有效登录态，或连接已断开。请通过 DSH 窗口正常打开看板；在终端里不带认证 Cookie 直接执行 `curl http://127.0.0.1:<port>/super-kanban/api/...` 返回 `401 unauthorized` 属于宿主的预期保护，不代表看板故障。
 - **403**：登录态存在但不是 owner。常见于：
   - 用另一个浏览器标签/另一个 DSH 实例的地址访问当前实例的端口；
   - 远程访问（非本机回环地址）时权限不足；

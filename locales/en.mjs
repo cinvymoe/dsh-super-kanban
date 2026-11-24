@@ -354,7 +354,7 @@ export default Object.freeze({
   "会话中断": "Session interrupted",
   "会话空闲": "Session idle",
   "未关联": "Not linked",
-  "第 {0} 轮": "Turn {0} turns",
+  "第 {0} 轮": "Turn {0}",
   "待办 {0}/{1}": "To-dos {0}/{1}",
   "{0} · {1} 项": "{0} · {1} items",
   "其他文件": "Other files",
@@ -1012,7 +1012,7 @@ export default Object.freeze({
   "## 关联会话": "## Linked sessions",
   "主会话": "Primary session",
   "当前续做目标": "Current continuation target",
-  "- 其余 {0} 个会话见任务详情": "- See task details for the other {0} sessions in task details",
+  "- 其余 {0} 个会话见任务详情": "- See task details for the other {0} sessions",
   "## 要求": "## Requirements",
   "从会话导入待办 {0} 项": "Imported session to-dos: {0} items",
   "{0}子任务：{1}": "{0}Subtask: {1}",
@@ -1106,5 +1106,7 @@ export default Object.freeze({
   "重置自动任务并重扫": "Reset auto tasks & rescan",
   "将清除 {0} 项自动任务并按最近 {1} 天重扫（保留手动任务与项目，自动保存恢复点）": "Clear {0} automatic tasks and rescan the last {1} days (manual tasks and projects are kept, and a restore point is saved)",
   "已重置自动任务并开始按最近 {0} 天重扫": "Reset automatic tasks and started rescanning the last {0} days",
-  "确认重置并重扫": "Confirm reset & rescan"
+  "确认重置并重扫": "Confirm reset & rescan",
+  "仅当前 DSH 实例的持有者可访问任务看板": "Only the owner of this DSH instance can access Super Kanban",
+  "登录态已失效或未通过本机认证，请刷新页面或重启 DSH 后重试": "Session expired or not authenticated; reload the page or restart DSH and try again"
 });

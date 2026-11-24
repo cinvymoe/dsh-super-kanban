@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-11-24
+
+### 修复与改进
+
+- 修复在 DeepSeek Harness `v0.2.3-alpha.2` 及更高桌面版本中打开看板时报 `看板加载失败 · unauthorized` 的问题：路由显式声明 `auth: "required"` 并优先校验 `WebServer` 传入的 `owner` `PeerScope`（非 `owner` 或已中止连接严格拦截且绝不回退），同时在旧版 DSH（`0.2.1-rc.5`–`0.2.2-rc.5`）无缝回退 `connection.admit(req)`，并在认证错误响应中附带双语可读提示与 `Cache-Control: no-store` 安全响应头。
+- 修复英文界面下任务详情「重新研判」遇到并发冲突（`busy`）时未能识别结构化错误码的问题，并修正两处英文翻译重复词条。
+- 改进无障碍与视觉细节：任务详情子任务删除按钮在键盘聚焦与触控设备上保持可见，减弱动态效果（`prefers-reduced-motion`）扩展覆盖悬浮看板、快聊浮层与会话页头，统一看板输入框焦点样式与深色模式原生下拉选项对比度，并为 GitHub Pages 落地页补齐截图固有尺寸与跳过导航链接。
+- 补齐 `scripts/validate.mjs` 对全部服务端模块、语言包、插件详情文档与测试套件的强校验，同步更新架构、接口契约与排障文档。
+- Fixed `unauthorized` board load failures on DeepSeek Harness `v0.2.3-alpha.2+` desktop by validating the `WebServer`-supplied `owner` `PeerScope` directly (while preserving `connection.admit(req)` fallback for DSH `< 0.2.3` and localized `no-store` error messages), fixed `task.analyze` busy error handling in English UI, improved keyboard focus/reduced-motion/dark-select/landing-page accessibility, and aligned repository validation and troubleshooting docs.
+
+感谢 [@huangbaba1992](https://github.com/huangbaba1992) 反馈 DSH `v0.2.3-alpha.2` 认证兼容问题（[#19](https://github.com/topmindspace/dsh-super-kanban/issues/19)）。
+
 ## [0.10.7] - 2026-11-23
 
 ### 修复与改进
@@ -546,7 +558,8 @@ workspace into a maintainable task board.
   v0.5.0 model requests go through the DSH native model service — see the
   current SECURITY.md.)*
 
-[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.7...HEAD
+[Unreleased]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.8...HEAD
+[0.10.8]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.7...v0.10.8
 [0.10.7]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/topmindspace/dsh-super-kanban/compare/v0.10.4...v0.10.5

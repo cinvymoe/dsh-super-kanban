@@ -50,7 +50,7 @@ function loadClient(services, { snapshot, view = "attention", filters, prefs, cl
   };
   const script = inspect ? source.replace("return { apply, inject:",
     "return { apply, useBoardData, command, draftChanges, chatContext, floatingSummary, floatingReview, canAcceptTask, canAcceptReview, subscribeBoardRefresh, normalizePrefs, quickCapturePayload, " +
-    "folderGlyph, folderColor, t, STATUS_META, FLOAT_TABS, displayLocale, " +
+    "folderGlyph, folderColor, t, STATUS_META, FLOAT_TABS, displayLocale, analyzeErrorToast, " +
     "markdownBlocks, renderInline, taskChatReference, ArtifactsView, TaskCollection, TaskLinks, MaintenanceView, SettingsModal, scanProgressInfo, inject:") : source;
   vm.runInNewContext(script, context, { filename: "client.js" });
   plugin.apply({
@@ -1333,4 +1333,31 @@ test("maintenance view confirms and dispatches board.reset with the chosen windo
   const windowSelect = [...elements(settingsView)].find((node) => node.type === "select" && node.props["aria-label"] === "活跃周期");
   assert.equal(windowSelect.props.value, 7);
   assert.ok(windowSelect.children.flat().some((option) => option?.props?.value === 3), "activity window includes 3 days");
+});
+
+test("analyzeErrorToast respects structured busy codes in both English and Chinese", () => {
+  const en = loadClient({ locale: { getSnapshot: () => ({ active: "en-US" }) } }, { inspect: true }).plugin;
+  assert.equal(
+    en.analyzeErrorToast(Object.assign(new Error("A scan is running. Try again later."), { code: "busy" })),
+    "A scan is running. Try again later.",
+  );
+  assert.equal(
+    en.analyzeErrorToast(Object.assign(new Error("Another AI task is running. Try again later."), { code: "busy" })),
+    "Another AI task is running. Try again later.",
+  );
+  assert.equal(
+    en.analyzeErrorToast(Object.assign(new Error(""), { code: "busy" })),
+    "Cannot reanalyze while a scan is running",
+  );
+  assert.equal(
+    en.analyzeErrorToast(new Error("Request timed out")),
+    "Reanalysis failed: Request timed out",
+  );
+
+  const zh = loadClient({ locale: { getSnapshot: () => ({ active: "zh-CN" }) } }, { inspect: true }).plugin;
+  assert.equal(
+    zh.analyzeErrorToast(Object.assign(new Error("扫描进行中，请稍后再试"), { code: "busy" })),
+    "扫描进行中，请稍后再试",
+  );
+  assert.equal(zh.analyzeErrorToast(new Error("扫描正在进行")), "扫描进行中，暂时无法重新研判");
 });

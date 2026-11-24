@@ -47,7 +47,7 @@ Super Kanban 是一个 **DSH 插件包**，由两个半边组成：
 | `server/quick-chat.mjs` | 快聊模型调用，负责各模式的提示词、参考资料校验、流式 HTTP 响应、并发、断开取消和限时 |
 | `server/projects.mjs` | 项目、日期及任务规划字段的存储格式与文本上限 |
 | `server/store.mjs` | 持久化：`state.json` / `sessions-cache.json`，原子写、裁剪、版本迁移、损坏恢复 |
-| `server/auth.mjs` | owner 鉴权决策表：归一化 `connection.admit()` 结果，异常/畸形输入一律 fail-closed 403 |
+| `server/auth.mjs` | owner 鉴权决策表：优先校验 DSH `>= 0.2.3` `WebServer` 传入的 `PeerScope`，旧版回退 `connection.admit()`；非 owner / 已中止 / 畸形输入一律 fail-closed |
 | `server/task-relations.mjs` | 任务关系校验与环检测、问题文本标识 |
 | `server/http.mjs` | HTTP 公共设施：JSON 响应、受控请求体读取、错误分类、id / 载荷校验 |
 | `server/i18n.mjs` | 无依赖翻译器与请求级语言上下文，供服务端和 `scripts/build-i18n.mjs` 共用 |
@@ -73,10 +73,8 @@ Super Kanban 是一个 **DSH 插件包**，由两个半边组成：
 ### 入口与鉴权（`index.mjs`）
 
 1. 创建 `createKanbanService({ ctx })`，通过 `ctx.effect` 管理服务生命周期；
-2. `ctx.inject(["connection", "webServer"])` 后，把 `/super-kanban/api` 注册为前缀路由；
-3. 每个请求先经过 `server/auth.mjs` 的 `ownerAdmission(connection, req)`：内部调用 `connection.admit(req)`，
-   只有 `owner` 身份的 peer 允许访问；返回 `{ok:false, status}`（通常 403）时直接拒绝，admission 抛错或返回
-   非预期结构时同样 fail-closed；
+2. `ctx.inject(["connection", "webServer"])` 后，把 `/super-kanban/api` 注册为 `auth: "required"` 的前缀路由；
+3. 每个请求先经过 `server/auth.mjs` 的 `ownerAdmission(connection, req, peer)`：在 DSH `>= 0.2.3` 中优先校验 `WebServer` 第 3 参数传入的 `peer`（要求 `principal.kind === "owner"` 且 `!peer.signal?.aborted`，非 owner 直接 403 且绝不回退），在旧版 2 参数 `WebServer`（`peer === undefined`）中回退调用 `connection.admit(req)`；admission 拒绝、抛错或返回非预期结构时统一 fail-closed 并附带本地化错误说明；
 4. 路由处理统一交给 `service.handle(req, res, { route, url, method })`，错误不会打穿 host。
 
 因为 DSH 的 API 只服务本机（回环地址），加上 owner 鉴权，看板 API 不会暴露给其他网络来源。
@@ -276,7 +274,7 @@ LLM 请求经 **DSH 原生 LLM 服务**（`ctx.llm`）发出：插件不再直�
 | 边界 | 实现 |
 | --- | --- |
 | 网络监听 | 只由 DSH 的本地 web server 提供 API；无独立端口、无外部监听 |
-| API 鉴权 | `connection.admit` + owner 身份；非 owner 一律 403 |
+| API 鉴权 | `WebServer` 预准入 `peer`（DSH `>= 0.2.3`）或 `connection.admit` 回退（旧版 DSH）+ owner 身份校验；非 owner 一律 403 |
 | 出站请求 | 模型请求经 **DSH 原生 LLM 服务**发出，目标是「你在 DSH 中配置的模型服务商」（官方账号 / API Key / 第三方 provider）。研判可选、可关闭，只发压缩摘要；润色和快聊仅在用户使用时发送对应内容。看板自身无其它出站请求（无遥测、无更新检查、无远程配置） |
 | 凭证 | 不再由插件读取或保存：凭证由 DSH 的 credentials 机制解析，经 `ctx.llm` 使用；插件日志与导出中不含任何 token |
 | 请求内容 | system prompt + 压缩会话摘要（≤1.5KB/会话）：标题、最近用户请求、最近回复、todo、错误、文件与工具摘要；不含全文、不含文件内容；不传 `sessionId`（不会附带官方会话日志扩展字段）、不传 tools / 图片 |

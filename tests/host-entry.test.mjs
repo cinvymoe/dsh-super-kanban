@@ -85,10 +85,11 @@ function setup(t, admit) {
   return { home, captured, connection };
 }
 
-async function callHandler(registered, { url = `${API_PREFIX}/ping`, method = "GET" } = {}) {
+async function callHandler(registered, { url = `${API_PREFIX}/ping`, method = "GET", headers = {}, peer } = {}) {
   const res = new MockResponse();
-  const req = { url, method };
-  await registered.handler(req, res);
+  const req = { url, method, headers };
+  if (peer === undefined) await registered.handler(req, res);
+  else await registered.handler(req, res, peer);
   let json = null;
   try {
     json = JSON.parse(res.body);
@@ -100,13 +101,39 @@ async function callHandler(registered, { url = `${API_PREFIX}/ping`, method = "G
 
 const owner = { peer: { principal: { kind: "owner" } } };
 
-test("index exports the plugin name and mounts a prefix route", (t) => {
+test("index exports the plugin name and mounts an auth-required prefix route", (t) => {
   assert.equal(name, "super-kanban");
   const { captured } = setup(t, () => owner);
   assert.ok(captured.registered, "webServer.register must be called");
   assert.equal(captured.registered.kind, "prefix");
   assert.equal(captured.registered.path, API_PREFIX);
+  assert.equal(captured.registered.auth, "required");
   assert.equal(typeof captured.registered.handler, "function");
+});
+
+test("DSH >= 0.2.3 WebServer owner peer is admitted even when connection.admit(req) rejects (#19)", async (t) => {
+  const { captured } = setup(t, () => ({ rejection: 401 }));
+  const { status, json } = await callHandler(captured.registered, {
+    url: `${API_PREFIX}/state`,
+    peer: { principal: { kind: "owner" }, signal: new AbortController().signal },
+  });
+  assert.equal(status, 200);
+  assert.equal(json.ok, true);
+  assert.ok(Array.isArray(json.tasks));
+});
+
+test("DSH >= 0.2.3 non-owner WebServer peer is rejected with 403 and never falls back to connection.admit", async (t) => {
+  const { captured } = setup(t, () => owner);
+  const { status, headers, json } = await callHandler(captured.registered, {
+    headers: { "x-super-kanban-locale": "en-US" },
+    peer: { principal: { kind: "guest" } },
+  });
+  assert.equal(status, 403);
+  assert.equal(headers["Cache-Control"], "no-store");
+  assert.equal(headers["X-Content-Type-Options"], "nosniff");
+  assert.equal(json.ok, false);
+  assert.equal(json.error, "unauthorized");
+  assert.match(json.message, /Only the owner/);
 });
 
 test("owner can read the AI model catalog through the real wiring", async (t) => {
@@ -134,18 +161,28 @@ test("owner requests are forwarded to the kanban service", async (t) => {
   assert.equal(notFound.json.error, "not-found");
 });
 
-test("DSH admission rejections are passed through as unauthorized", async (t) => {
+test("DSH admission rejections are passed through as unauthorized with localized message", async (t) => {
   const { captured } = setup(t, () => ({ rejection: 401 }));
-  const { status, json } = await callHandler(captured.registered);
-  assert.equal(status, 401);
-  assert.deepEqual(json, { ok: false, error: "unauthorized" });
+  const zh = await callHandler(captured.registered);
+  assert.equal(zh.status, 401);
+  assert.equal(zh.headers["Cache-Control"], "no-store");
+  assert.equal(zh.json.ok, false);
+  assert.equal(zh.json.error, "unauthorized");
+  assert.match(zh.json.message, /登录态已失效/);
+
+  const en = await callHandler(captured.registered, { headers: { "x-super-kanban-locale": "en" } });
+  assert.equal(en.status, 401);
+  assert.equal(en.json.error, "unauthorized");
+  assert.match(en.json.message, /Session expired or not authenticated/);
 });
 
 test("non-owner peers are rejected with 403 before touching the service", async (t) => {
   const { captured } = setup(t, () => ({ peer: { principal: { kind: "member" } } }));
   const { status, json } = await callHandler(captured.registered);
   assert.equal(status, 403);
-  assert.deepEqual(json, { ok: false, error: "unauthorized" });
+  assert.equal(json.ok, false);
+  assert.equal(json.error, "unauthorized");
+  assert.match(json.message, /持有者/);
 });
 
 test("a throwing admission probe fails closed with 403 and no rejected promise", async (t) => {
@@ -154,7 +191,9 @@ test("a throwing admission probe fails closed with 403 and no rejected promise",
   });
   const { status, json } = await callHandler(captured.registered);
   assert.equal(status, 403);
-  assert.deepEqual(json, { ok: false, error: "unauthorized" });
+  assert.equal(json.ok, false);
+  assert.equal(json.error, "unauthorized");
+  assert.match(json.message, /持有者/);
 });
 
 test("malformed admission shapes fail closed", async (t) => {

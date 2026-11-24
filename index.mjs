@@ -6,11 +6,19 @@
  * which owns session scanning, AI analysis, storage and the board state.
  */
 import { createKanbanService } from "./server/service.mjs";
-import { ownerAdmission } from "./server/auth.mjs";
+import { ownerAdmission, unauthorizedMessage } from "./server/auth.mjs";
+import { runWithLanguage } from "./server/i18n.mjs";
+import { localeFromRequest, localeFromSnapshot } from "./server/locale.mjs";
 
 export const name = "super-kanban";
 
 const API_PREFIX = "/super-kanban/api";
+
+const JSON_HEADERS = {
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+};
 
 /** Write a small JSON error without ever throwing into the DSH web server. */
 function sendJson(res, status, body) {
@@ -19,7 +27,7 @@ function sendJson(res, status, body) {
       res.end();
       return;
     }
-    res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+    res.writeHead(status, JSON_HEADERS);
     res.end(JSON.stringify(body));
   } catch {
     /* socket already closed */
@@ -43,14 +51,20 @@ export function apply(ctx) {
         webCtx.webServer.register({
           kind: "prefix",
           path: API_PREFIX,
-          handler: async (req, res) => {
+          auth: "required",
+          handler: async (req, res, peer) => {
             // Owner-only: this board reads the user's private session logs.
-            const admission = ownerAdmission(webCtx.connection, req);
+            // DSH >= 0.2.3 passes the admitted PeerScope as `peer`; older DSH
+            // hosts invoke handler(req, res) so ownerAdmission falls back to
+            // connection.admit(req).
+            const admission = ownerAdmission(webCtx.connection, req, peer);
             if (!admission.ok) {
               if (admission.error) {
                 ctx.logger?.warn?.(`[super-kanban] admission failed: ${String(admission.error?.message || admission.error)}`);
               }
-              sendJson(res, admission.status, { ok: false, error: "unauthorized" });
+              const language = localeFromRequest(req) || localeFromSnapshot(ctx) || "zh";
+              const message = runWithLanguage(language, () => unauthorizedMessage(admission.status));
+              sendJson(res, admission.status, { ok: false, error: "unauthorized", message });
               return;
             }
             let url;

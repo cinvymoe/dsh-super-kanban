@@ -366,7 +366,7 @@ window.__ModuleLoader__.load({
   "会话中断": "Session interrupted",
   "会话空闲": "Session idle",
   "未关联": "Not linked",
-  "第 {0} 轮": "Turn {0} turns",
+  "第 {0} 轮": "Turn {0}",
   "待办 {0}/{1}": "To-dos {0}/{1}",
   "{0} · {1} 项": "{0} · {1} items",
   "其他文件": "Other files",
@@ -1024,7 +1024,7 @@ window.__ModuleLoader__.load({
   "## 关联会话": "## Linked sessions",
   "主会话": "Primary session",
   "当前续做目标": "Current continuation target",
-  "- 其余 {0} 个会话见任务详情": "- See task details for the other {0} sessions in task details",
+  "- 其余 {0} 个会话见任务详情": "- See task details for the other {0} sessions",
   "## 要求": "## Requirements",
   "从会话导入待办 {0} 项": "Imported session to-dos: {0} items",
   "{0}子任务：{1}": "{0}Subtask: {1}",
@@ -1117,7 +1117,9 @@ window.__ModuleLoader__.load({
   "重置自动任务并重扫": "Reset auto tasks & rescan",
   "将清除 {0} 项自动任务并按最近 {1} 天重扫（保留手动任务与项目，自动保存恢复点）": "Clear {0} automatic tasks and rescan the last {1} days (manual tasks and projects are kept, and a restore point is saved)",
   "已重置自动任务并开始按最近 {0} 天重扫": "Reset automatic tasks and started rescanning the last {0} days",
-  "确认重置并重扫": "Confirm reset & rescan"
+  "确认重置并重扫": "Confirm reset & rescan",
+  "仅当前 DSH 实例的持有者可访问任务看板": "Only the owner of this DSH instance can access Super Kanban",
+  "登录态已失效或未通过本机认证，请刷新页面或重启 DSH 后重试": "Session expired or not authenticated; reload the page or restart DSH and try again"
 });
     const createTranslator = function createTranslator(catalog, language = "en") {
   return function translate(source, values = []) {
@@ -2351,7 +2353,8 @@ window.__ModuleLoader__.load({
 .sk-page ::-webkit-scrollbar-thumb:hover,.sk-floating ::-webkit-scrollbar-thumb:hover,.sk-overlay-host ::-webkit-scrollbar-thumb:hover{background:var(--dsh-scrollbar-thumb-hover,var(--dsw-alias-scrollbar-hover-l1,#d4d4d4))}
 .sk-page ::-webkit-scrollbar-track,.sk-floating ::-webkit-scrollbar-track,.sk-overlay-host ::-webkit-scrollbar-track{background:transparent}
 .sk-page ::-webkit-scrollbar-button,.sk-floating ::-webkit-scrollbar-button,.sk-overlay-host ::-webkit-scrollbar-button{display:none}
-.sk-page :focus-visible{outline:2px solid color-mix(in srgb,var(--sk-accent) 55%,transparent);outline-offset:2px}
+.sk-page :focus-visible,.sk-host-header :focus-visible{outline:2px solid color-mix(in srgb,var(--sk-accent) 55%,transparent);outline-offset:2px}
+.sk-page .sk-input:focus-visible,.sk-page .sk-textarea:focus-visible,.sk-page .sk-continue-textarea:focus-visible{outline:0}
 @keyframes skPulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* ---------- buttons ---------- */
 .sk-btn{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;
@@ -2380,6 +2383,7 @@ window.__ModuleLoader__.load({
   background-image:linear-gradient(45deg,transparent 50%,var(--sk-ink-4) 50%),linear-gradient(135deg,var(--sk-ink-4) 50%,transparent 50%);
   background-position:calc(100% - 11px) 52%,calc(100% - 7px) 52%;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
 .sk-select:hover{background-color:var(--sk-hover);border-color:var(--sk-line-strong);color:var(--sk-ink)}
+.sk-select option,.sk-select optgroup{background-color:var(--sk-surface);color:var(--sk-ink)}
 .sk-count{font-size:11px;color:var(--sk-ink-4);white-space:nowrap;font-variant-numeric:tabular-nums;flex:none}
 .sk-count b{color:var(--sk-ink-3);font-weight:600}
 .sk-col{min-width:0;display:flex;flex-direction:column;border:1px solid var(--sk-line-soft);border-radius:14px;
@@ -2393,7 +2397,7 @@ window.__ModuleLoader__.load({
 .sk-col-count{min-width:20px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;border-radius:6px;
   background:var(--sk-surface-2);border:1px solid var(--sk-line-soft);color:var(--sk-ink-3);font-size:10px;font-weight:600;font-variant-numeric:tabular-nums}
 .sk-col-add{margin-left:auto;cursor:pointer;border:1px solid transparent;background:transparent;color:var(--sk-ink-4);
-  width:24px;height:24px;border-radius:7px;display:grid;place-items:center;transition:all .15s}
+  width:24px;height:24px;border-radius:7px;display:grid;place-items:center;transition:background .15s,border-color .15s,color .15s}
 .sk-col-add:hover{background:var(--sk-surface);border-color:var(--sk-line);color:var(--sk-ink)}
 .sk-col-body{flex:1;overflow-y:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:8px;min-height:70px;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l1) transparent}
 .sk-col-empty{margin:auto;text-align:center;font-size:11px;color:var(--sk-ink-4);padding:22px 12px;line-height:1.6;
@@ -2552,7 +2556,8 @@ window.__ModuleLoader__.load({
 .sk-subtask.done .sk-subtask-text{color:var(--sk-ink-3);text-decoration:line-through}
 .sk-subtask-text{flex:1;min-width:0;overflow-wrap:anywhere}
 .sk-subtask-del{flex:none;display:grid;place-items:center;width:18px;height:18px;border:none;border-radius:4px;background:transparent;color:var(--sk-ink-4);cursor:pointer;opacity:0}
-.sk-subtask:hover .sk-subtask-del{opacity:1}
+.sk-subtask:hover .sk-subtask-del,.sk-subtask:focus-within .sk-subtask-del,.sk-subtask-del:focus-visible{opacity:1}
+@media (hover:none){.sk-subtask-del{opacity:1}}
 .sk-subtask-del:hover{color:var(--sk-red);background:var(--sk-hover)}
 .sk-subtask-add{display:flex;gap:6px;align-items:center;margin-top:3px}
 .sk-subtask-add .sk-input{height:30px;font-size:11.5px}
@@ -2583,7 +2588,10 @@ window.__ModuleLoader__.load({
 .sk-page.is-side .sk-continue-textarea{min-height:150px}
 
 @media (prefers-reduced-motion:reduce){
-  .sk-page *,.sk-page *::before,.sk-page *::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  .sk-page *,.sk-page *::before,.sk-page *::after,
+  .sk-floating *,.sk-floating *::before,.sk-floating *::after,
+  .sk-overlay-host *,.sk-overlay-host *::before,.sk-overlay-host *::after,
+  .sk-host-header *,.sk-host-header *::before,.sk-host-header *::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
 }
 
 /* ======================= v3：DSH-native 单色重做 ======================= */
@@ -4385,6 +4393,14 @@ button.sk-task-row-main{cursor:pointer}
             placeholder: t("记录决策、背景或提醒"), onChange: (event) => update({ notes: event.target.value }) })));
     }
 
+    function analyzeErrorToast(cause) {
+      const raw = cause && typeof cause === "object" && "message" in cause ? cause.message : cause;
+      const message = String(raw ?? "").trim();
+      if (cause?.code === "busy") return message || t("扫描进行中，暂时无法重新研判");
+      if (/扫描/.test(message)) return t("扫描进行中，暂时无法重新研判");
+      return t("重新研判失败：{0}", [message]);
+    }
+
     function TaskDrawer({ task, signal, tasks, workspaces, projects = [], onOpenTask, ctxProps, settings, desktopFiles, onClose, onChanged, onAskChat, pushToast }) {
       const host = (ctxProps && ctxProps.host) || {};
       const goal = goalInfoOf(task);
@@ -4700,8 +4716,7 @@ button.sk-task-row-main{cursor:pointer}
           pushToast(details.length ? `${message} · ${details.join(" · ")}` : message, "info");
           await onChanged();
         } catch (cause) {
-          const message = String((cause && cause.message) || cause);
-          pushToast(/扫描/.test(message) ? t("扫描进行中，暂时无法重新研判") : t("重新研判失败：{0}", [message]), "error");
+          pushToast(analyzeErrorToast(cause), "error");
         } finally {
           setAnalyzeBusy(false);
         }

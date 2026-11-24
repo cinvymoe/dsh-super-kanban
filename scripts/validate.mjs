@@ -35,6 +35,7 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "internal", "dev", "dist", "d
 export const REQUIRED_FILES = [
   "package.json",
   "README.md",
+  "README.en.md",
   "LICENSE",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
@@ -49,6 +50,9 @@ export const REQUIRED_FILES = [
   "icon.svg",
   "install.sh",
   "uninstall.sh",
+  "locale/en.json",
+  "locale/zh.json",
+  "locales/en.mjs",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
   ".github/dependabot.yml",
@@ -56,22 +60,30 @@ export const REQUIRED_FILES = [
   ".github/ISSUE_TEMPLATE/feature_request.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/PULL_REQUEST_TEMPLATE.md",
+  "scripts/build-i18n.mjs",
   "scripts/validate.mjs",
   "scripts/check-privacy.mjs",
   "scripts/check-docs.mjs",
   "scripts/check-version.mjs",
   "scripts/build-market-index.mjs",
   "scripts/release.mjs",
+  "tests/ai-budget.test.mjs",
+  "tests/ai-models.test.mjs",
   "tests/store.test.mjs",
   "tests/store-robustness.test.mjs",
   "tests/analyzer.test.mjs",
   "tests/analyzer-llm.test.mjs",
   "tests/sessions.test.mjs",
+  "tests/session-title.test.mjs",
   "tests/service.test.mjs",
   "tests/http.test.mjs",
   "tests/auth.test.mjs",
   "tests/titles.test.mjs",
   "tests/host-entry.test.mjs",
+  "tests/client.test.mjs",
+  "tests/i18n.test.mjs",
+  "tests/locale-server.test.mjs",
+  "tests/text-projection.test.mjs",
   "tests/package.test.mjs",
   "tests/market-index.test.mjs",
   "tests/check-privacy.test.mjs",
@@ -80,8 +92,14 @@ export const REQUIRED_FILES = [
   "docs/DESIGN.md",
   "docs/DEVELOPMENT.md",
   "docs/INSTALL.md",
+  "docs/LOCALIZATION.md",
   "docs/MARKET.md",
+  "docs/ROADMAP.md",
+  "docs/SCREENSHOTS.md",
   "docs/TROUBLESHOOTING.md",
+  "docs/WORKFLOWS.md",
+  "docs/plugin/en.md",
+  "docs/plugin/zh.md",
   "docs/index.html",
   "docs/.nojekyll",
   "docs/icon.svg",
@@ -97,6 +115,12 @@ export const REQUIRED_SERVER_FILES = [
   "server/store.mjs",
   "server/auth.mjs",
   "server/http.mjs",
+  "server/i18n.mjs",
+  "server/locale.mjs",
+  "server/projects.mjs",
+  "server/quick-chat.mjs",
+  "server/task-relations.mjs",
+  "server/text-projection.mjs",
   "server/titles.mjs",
 ];
 
@@ -528,7 +552,7 @@ function checkFileList(root, pkg, problem, note, failures) {
     const target = path.join(root, String(entry).replace(/\/+$/, ""));
     if (!fs.existsSync(target)) problem(`package.json files: missing "${entry}"`);
   }
-  for (const required of ["index.mjs", "client.js", "cordis.patch.yml", "server/", "icon.svg", "CHANGELOG.md"]) {
+  for (const required of ["index.mjs", "client.js", "cordis.patch.yml", "server/", "locale/", "locales/", "docs/plugin/", "icon.svg", "CHANGELOG.md"]) {
     if (!files.includes(required)) problem(`package.json files: "${required}" must be listed so it ships on npm`);
   }
   if (failures.length === before) note(`package files (${files.length} entries)`);

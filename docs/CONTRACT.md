@@ -148,7 +148,7 @@ type Priority = "P0" | "P1" | "P2" | "P3";
 
 ## 3. HTTP API
 
-所有路由前缀 `/super-kanban/api`，同源请求（`credentials: "same-origin"`），由 Host 侧 `connection.admit` 完成鉴权（非 owner 返回 403）。错误响应统一：
+所有路由前缀 `/super-kanban/api`（注册 `auth: "required"`），同源请求（`credentials: "same-origin"`），仅对未中止的 `owner` 身份开放：DSH `>= 0.2.3` 由宿主 `WebServer` 预校验并传入第 3 参数 `peer`（非 `owner` 直接返回 403，不回退）；旧版 DSH（`< 0.2.3`）回退 `connection.admit(req)` 校验。错误响应统一携带 `Cache-Control: no-store`：
 
 ```json
 { "ok": false, "error": "code", "message": "说明" }
